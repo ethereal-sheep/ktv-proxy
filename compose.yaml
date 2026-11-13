@@ -1,0 +1,16 @@
+services:
+  ktv:
+    build: .
+    restart: unless-stopped
+    # Host networking so "Search my network" scans your LAN, not Docker's bridge subnet.
+    # If you'd rather use a bridge: delete this line, uncomment ports, and type the box's IP on the landing page.
+    network_mode: host
+    # ports: ["8080:8080"]
+    environment:
+      PORT: 8080
+      # KTV_HOST: http://192.168.100.80:8084   # optional preset
+    volumes:
+      - ktv-data:/data
+
+volumes:
+  ktv-data:

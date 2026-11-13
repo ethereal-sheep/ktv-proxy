@@ -1,0 +1,5 @@
+node_modules
+dist
+ktv-config.json
+lxc
+.git

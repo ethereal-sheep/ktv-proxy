@@ -1,0 +1,10 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+@theme inline { --color-accent: var(--accent); }
+:root { --accent: #ec4899; }
+body { @apply bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100; }
+@keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
+.animate-pop { animation: pop .15s ease-out; }
+@keyframes fade { from { opacity: 0; } }
+.animate-fade { animation: fade .15s ease-out; }
+html { scrollbar-gutter: stable; }
