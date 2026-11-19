@@ -4,7 +4,7 @@ import { networkInterfaces } from 'node:os'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { addFavorite, isSong, listSongs, recordHistory, removeFavorite, setDbDir } from './db.ts'
+import { addCategory, addFavorite, cleanName, deleteCategory, isSong, reorderCategories, listCategories, listFavorites, listHistory, recordHistory, removeFavorite, renameCategory, setDbDir, setSongCategory } from './db.ts'
 
 const PORT = 8084
 const PROBE = '/demo/PlaylistServlet?onSelectPage=true&jsonpCallback=cb'
@@ -79,11 +79,47 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     try { writeFileSync(CONFIG, JSON.stringify({ host })) } catch (e) { console.error('could not save config', e) }
     json(res, 200, { host })
   })
+  const path = new URL(url, 'http://x').pathname
+  if (path === '/api/categories/order' && req.method === 'PUT') return void readBody(req).then(b => {
+    let ids: unknown
+    try { ids = JSON.parse(b).ids } catch { /* falls through to the 400 */ }
+    if (!Array.isArray(ids) || !ids.length || !ids.every(n => Number.isInteger(n))) return json(res, 400, { error: 'expected ids' })
+    try { reorderCategories(ids) } catch (e) { console.error('could not reorder', e); return json(res, 500, { error: 'could not save' }) }
+    json(res, 200, {})
+  })
+  const cat = path.match(/^\/api\/categories(?:\/(\d+))?$/)
+  if (cat) {
+    const id = cat[1] === undefined ? undefined : +cat[1]
+    if (req.method === 'GET' && id === undefined) return json(res, 200, listCategories())
+    if (req.method === 'DELETE' && id !== undefined) {
+      const songs = new URL(url, 'http://x').searchParams.get('songs') ?? 'keep'
+      if (songs !== 'keep' && songs !== 'orphans' && songs !== 'all') return json(res, 400, { error: 'songs must be keep, orphans or all' })
+      try { deleteCategory(id, songs) } catch (e) { console.error('could not delete category', e); return json(res, 500, { error: 'could not delete' }) }
+      return json(res, 200, {})
+    }
+    if ((req.method === 'POST' && id === undefined) || (req.method === 'PATCH' && id !== undefined)) return void readBody(req).then(b => {
+      let name: string | null = null
+      try { name = cleanName(JSON.parse(b).name) } catch { /* falls through to the 400 */ }
+      if (!name) return json(res, 400, { error: 'Enter a name of up to 50 characters' })
+      try {
+        const row = id === undefined ? addCategory(name) : renameCategory(id, name)
+        json(res, row ? 200 : 404, row ?? { error: 'no such category' })
+      } catch (e) {
+        if (/UNIQUE/.test(String(e))) return json(res, 409, { error: `"${name}" already exists` })
+        console.error('could not save category', e); json(res, 500, { error: 'could not save' })
+      }
+    })
+  }
+  const link = path.match(/^\/api\/favorites\/([^/]+)\/categories\/(\d+)$/)
+  if (link && (req.method === 'PUT' || req.method === 'DELETE')) {
+    try { setSongCategory(decodeURIComponent(link[1]), +link[2], req.method === 'PUT') } catch { return json(res, 404, { error: 'unknown favorite or category' }) }
+    return json(res, 200, {})
+  }
   // Favorites and history live in SQLite (server/db.ts); each action is one row operation, so devices can't overwrite each other's lists.
   const list = url.match(/^\/api\/(favorites|history)(?:\/([^/]+))?$/)
   if (list) {
     const [, name, bm] = list
-    if (req.method === 'GET' && !bm) return json(res, 200, listSongs(name as 'favorites' | 'history'))
+    if (req.method === 'GET' && !bm) return json(res, 200, name === 'favorites' ? listFavorites() : listHistory())
     if (req.method === 'DELETE' && bm && name === 'favorites') { removeFavorite(decodeURIComponent(bm)); return json(res, 200, {}) }
     if (req.method === 'POST' && !bm) return void readBody(req).then(b => {
       let song: unknown

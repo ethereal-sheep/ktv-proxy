@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { addFavorite, command, getHost, getList, getQueue, recordHistory, removeFavorite, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Filter, type Singer, type Song } from './api'
+import { addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
 
@@ -11,6 +11,7 @@ const FILTERS: [string, [string, Filter][]][] = [
   ['Language', LANGS.map(([n, v]): [string, Filter] => [n, { lang: v }])],
   ['Category', TYPES.map((n, i): [string, Filter] => [n, { songType: String(i + 1) }])],
 ]
+type CatFilter = 'all' | 'none' | number // favorites filter: everything, songs in no category, or one category id
 const fkey = (f: Filter) => JSON.stringify(f)
 const filterName = (f: Filter) => FILTERS.flatMap(([, i]) => i).find(([, x]) => fkey(x) === fkey(f))?.[0]
 
@@ -54,7 +55,20 @@ function Status({ state, empty, hasMore, more, retry }: { state: string; empty: 
 }
 
 type Act = (cmd: string, val?: string, label?: string, icon?: IconName, song?: Song) => void
-type Favs = { has: (s: Song) => boolean; toggle: (s: Song) => void }
+// tap: favorite it, or (if already a favorite) open its category picker. hold: favorite it if needed, then open the picker.
+type Favs = { has: (s: Song) => boolean; tap: (s: Song) => void; hold: (s: Song) => void }
+
+// A hold (500 ms) or right-click fires onLong and swallows the click that follows; a plain click fires onTap.
+function useHold(onTap: () => void, onLong: () => void) {
+  const timer = useRef(0), held = useRef(false)
+  const cancel = () => clearTimeout(timer.current)
+  return {
+    onPointerDown: () => { held.current = false; cancel(); timer.current = window.setTimeout(() => { held.current = true; onLong() }, 500) },
+    onPointerUp: cancel, onPointerLeave: cancel, onPointerCancel: cancel,
+    onClick: () => { if (!held.current) onTap(); held.current = false },
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (!held.current) { held.current = true; cancel(); onLong() } }, // touch long-press also fires this
+  }
+}
 
 // Scale font down continuously once text passes `from` width units (CJK glyphs count double), never below `min` px.
 const fit = (t: string, base: number, from: number, min: number) => {
@@ -67,6 +81,7 @@ function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; 
   const lbl = (t: string) => helperLabels && <span className="text-[10px] font-normal leading-none">{t}</span>
   const col = ' flex flex-col items-center gap-1'
   const cloud = String(s.cLOUD) === '1'
+  const hold = useHold(() => favs?.tap(s), () => favs?.hold(s))
   const singers = s.sINGER.split(/\s*,\s*/).filter(Boolean) // the box joins co-singers with a bare comma; wrap between singers, not inside a name
   return (
     <li className={`relative flex items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-shadow hover:shadow-md dark:bg-zinc-900`}>
@@ -79,7 +94,7 @@ function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; 
         <button className={btn + col} title="Play next" onClick={() => act('Pro2', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
         <button className={btn + col} title="Remove" onClick={() => act('Del1', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
       </> : <>
-        {favs && <button className={btn + col} title={favs.has(s) ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={favs.has(s)} onClick={() => favs.toggle(s)}><Icon name="favorites" className={favs.has(s) ? 'size-5 fill-current text-accent' : 'size-5'} />{lbl('Fav')}</button>}
+        {favs && <button className={btn + col + ' select-none'} title={favs.has(s) ? 'Categories' : 'Add to favorites (hold to pick categories)'} aria-pressed={favs.has(s)} {...hold}><Icon name="favorites" className={favs.has(s) ? 'size-5 fill-current text-accent' : 'size-5'} />{lbl('Fav')}</button>}
         <button className={btn + col} title="Play next" onClick={() => act('Pro1', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next', s)}><Icon name="next" />{lbl('Next')}</button>
         <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('Add1', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add', s)}><Icon name="add" />{lbl('Add')}</button>
       </>}
@@ -91,10 +106,17 @@ function Pill({ on, onClick, children }: { on?: boolean; onClick: () => void; ch
   return <button onClick={onClick} className={`rounded-full px-4 py-1.5 text-sm transition duration-150 hover:scale-105 active:scale-95 ${on ? 'bg-accent text-white' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{children}</button>
 }
 
-function FilterPanel({ tab, filter, setFilter, area, setArea, close }: {
-  tab: string; filter: Filter; setFilter: (f: Filter) => void; area: number; setArea: (a: number) => void; close: () => void
+function FilterPanel({ tab, filter, setFilter, area, setArea, cats, catFilter, setCatFilter, close }: {
+  tab: string; filter: Filter; setFilter: (f: Filter) => void; area: number; setArea: (a: number) => void
+  cats: Category[]; catFilter: CatFilter; setCatFilter: (c: CatFilter) => void; close: () => void
 }) {
-  const groups: [string, ReactNode[]][] = tab === 'songs'
+  const pick = (c: CatFilter) => { setCatFilter(c); close() }
+  const groups: [string, ReactNode[]][] = tab === 'favorites'
+    ? [['Category', [
+        <Pill key="all" on={catFilter === 'all'} onClick={() => pick('all')}>All</Pill>,
+        ...cats.map(c => <Pill key={c.id} on={catFilter === c.id} onClick={() => pick(c.id)}>{c.name}</Pill>),
+        <Pill key="none" on={catFilter === 'none'} onClick={() => pick('none')}>Uncategorized</Pill>]]]
+    : tab === 'songs'
     ? [['', [<Pill key="all" on={!Object.keys(filter).length} onClick={() => { setFilter({}); close() }}>All</Pill>]],
        ...FILTERS.map(([g, items]): [string, ReactNode[]] => [g, items.map(([n, f]) =>
          <Pill key={n} on={fkey(f) === fkey(filter)} onClick={() => { setFilter(f); close() }}>{n}</Pill>)])]
@@ -239,7 +261,7 @@ function SettingsMenu({ open, setOpen }: { open: boolean; setOpen: (o: boolean) 
 }
 
 // Fixed (not inside the header) so it opens at the same y as the filter popup.
-function SettingsPanel({ t }: { t: ReturnType<typeof useTheme> }) {
+function SettingsPanel({ t, onManage }: { t: ReturnType<typeof useTheme>; onManage: () => void }) {
   const st = useContext(SettingsCtx) as ReturnType<typeof useSettingsState>
   return (
     <div data-popup className="animate-pop pointer-events-auto absolute right-3 top-[4.75rem] w-64 max-w-[calc(100vw-1.5rem)] space-y-3 rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10">
@@ -263,7 +285,165 @@ function SettingsPanel({ t }: { t: ReturnType<typeof useTheme> }) {
       <Toggle label="Longer popups" on={st.longPopups} onClick={() => st.toggle('longPopups')} />
       <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Remote</h3>
       <Toggle label="Show mic controls" on={st.showMic} onClick={() => st.toggle('showMic')} />
+      <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Favorites</h3>
+      <button onClick={onManage} className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories</button>
     </div>
+  )
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-3 sm:items-center" onPointerDown={e => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-label={title} className="animate-pop max-h-[85dvh] w-full max-w-sm space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="min-w-0 break-words font-semibold">{title}</h3>
+          <button aria-label="Close" onClick={onClose} className="rounded-lg p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="remove" className="size-4" /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+const nSongs = (n: number) => `${n} song${n === 1 ? '' : 's'}`
+
+function CategoryPicker({ song, cats, setCat, unfavorite, onEdit, onClose }: { song: Song; cats: Category[]; setCat: (id: number, on: boolean) => void; unfavorite: () => void; onEdit: () => void; onClose: () => void }) {
+  const [sure, setSure] = useState(false) // first tap arms the button, second tap removes
+  return (
+    <Modal title={song.sONGNAME} onClose={onClose}>
+      <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500"><Icon name="tag" className="size-3.5" />Categories</h4>
+      {cats.length ? (
+        <div className="flex flex-wrap gap-2">
+          {cats.map(c => { const on = !!song.cats?.includes(c.id); return (
+            <button key={c.id} aria-pressed={on} onClick={() => setCat(c.id, !on)} className={`rounded-xl px-3 py-2 text-sm transition duration-150 active:scale-95 ${on ? 'bg-accent text-white hover:brightness-110' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{c.name}</button>) })}
+        </div>
+      ) : <p className="text-sm text-zinc-500">No categories yet. Use Edit categories to add some.</p>}
+      <div className="flex gap-2">
+        <button onClick={onEdit} className={btn + ' flex flex-1 items-center justify-center gap-2'}><Icon name="edit" className="size-4" />Edit categories</button>
+        {/* looks like the row's favorite button; first tap arms it (red, broken heart, ?), second tap removes */}
+        {sure
+          ? <button aria-label="Tap again to remove from favorites" title="Tap again to remove from favorites" onClick={() => { unfavorite(); onClose() }} onBlur={() => setSure(false)} autoFocus
+              className="flex w-[4.5rem] items-center justify-center gap-1 rounded-xl bg-red-500 py-3 text-white transition duration-150 hover:brightness-110 active:scale-90"><Icon name="unfav" /><span className="text-base font-bold leading-none">?</span></button>
+          : <button aria-label="Remove from favorites" title="Remove from favorites"  onClick={() => setSure(true)} className={btn + ' flex w-[4.5rem] items-center justify-center !px-0'}><Icon name="favorites" className="size-5 fill-current text-accent" /></button>}
+      </div>
+    </Modal>
+  )
+}
+
+function ManageCategories({ cats, setCats, favs, reload, onClose }: { cats: Category[]; setCats: (f: (l: Category[]) => Category[]) => void; favs: Song[]; reload: () => void; onClose: () => void }) {
+  const [name, setName] = useState('')
+  const [edit, setEdit] = useState<Category | null>(null)
+  const [del, setDel] = useState<Category | null>(null)
+  const [mode, setMode] = useState<DeleteSongs>('keep')
+  const [err, setErr] = useState('')
+  const run = (p: Promise<unknown>, done: () => void, msg?: string) =>
+    p.then(() => { setErr(''); done(); reload() }).catch(e => setErr(msg ?? e.message))
+  const input = 'min-w-0 flex-1 rounded-xl bg-zinc-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800'
+  const primary = 'rounded-xl bg-accent px-4 py-3 text-white transition hover:brightness-110 active:scale-95'
+  const iconBtn = 'rounded-lg p-2.5 transition duration-150 hover:bg-zinc-200 active:scale-90 dark:hover:bg-zinc-700'
+  // Drag a row by its grip as a floating card: rows only slide aside to show the landing spot. The order changes (and saves) on release.
+  // Arrow keys on the grip move a row one step.
+  const [drag, setDrag] = useState<{ id: number; from: number; to: number; y0: number; dy: number; step: number; settling?: boolean } | null>(null)
+  const reordered = (from: number, to: number) => { const n = [...cats]; n.splice(to, 0, n.splice(from, 1)[0]); return n }
+  // the request starts now; resolves true if it saved
+  const persist = (n: Category[]) => reorderCategories(n.map(x => x.id)).then(() => true, () => false)
+  const failed = () => { reload(); setErr("Couldn't save the order. Try again.") }
+  const commit = (from: number, to: number) => {
+    if (from === to) return
+    const n = reordered(from, to)
+    setCats(() => n)
+    persist(n).then(ok => ok || failed())
+  }
+  const cardInput = input.replace('dark:bg-zinc-800', 'dark:bg-zinc-700')
+
+  if (del) {
+    const inCat = favs.filter(s => s.cats?.includes(del.id))
+    const orphans = inCat.filter(s => s.cats!.length === 1).length
+    const removing = mode === 'all' ? inCat.length : mode === 'orphans' ? orphans : 0
+    const opts: [DeleteSongs, string, string, boolean][] = [
+      ['keep', 'Keep all songs in Favorites', 'The songs stay favorited. Songs that were only in this category become Uncategorized.', false],
+      ['orphans', `Also remove songs that are only in this category (${orphans})`, 'Songs that are also in another category stay favorited.', orphans === 0],
+      ['all', `Also remove all ${nSongs(inCat.length)} in this category from Favorites`, 'This includes songs that are also in other categories.', false],
+    ]
+    return (
+      <Modal title={`Delete "${del.name}"?`} onClose={onClose}>
+        <p className="text-sm text-zinc-500">{inCat.length ? 'The category is removed from all songs. Choose what happens to the songs in it.' : 'No songs in this category.'}</p>
+        {!!inCat.length && opts.map(([k, label, sub, off]) => (
+          <label key={k} className={`flex items-start gap-2 text-sm ${off ? 'opacity-50' : ''}`}>
+            <input type="radio" name="del" disabled={off} checked={mode === k} onChange={() => setMode(k)} className="mt-1 accent-accent" />
+            <span><span className="font-medium">{label}</span><span className="block text-xs text-zinc-500">{sub}</span></span>
+          </label>
+        ))}
+        <p aria-live="polite" className="min-h-5 text-sm text-red-500">{err || (removing > 0 ? `This will remove ${nSongs(removing)} from Favorites.` : '')}</p>
+        <div className="flex gap-2">
+          <button onClick={() => { setDel(null); setMode('keep'); setErr('') }} className={btn + ' flex-1'}>Cancel</button>
+          <button onClick={() => run(deleteCategory(del.id, mode), () => { setDel(null); setMode('keep') }, "Couldn't delete. Try again.")}
+            className="flex-1 rounded-xl bg-red-500 px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 active:scale-95">
+            Delete category
+          </button>
+        </div>
+      </Modal>
+    )
+  }
+
+  return (
+    <Modal title="Categories" onClose={onClose}>
+      {!cats.length && <p className="text-sm text-zinc-500">No categories yet.</p>}
+      <ul className="space-y-2">
+        {cats.map((c, i) => {
+          const held = drag?.id === c.id
+          const shift = !drag || held ? 0 : drag.from < drag.to && i > drag.from && i <= drag.to ? -drag.step : drag.to < drag.from && i >= drag.to && i < drag.from ? drag.step : 0
+          // transition only mid-drag: at rest it would animate rows from their old offsets when the new order lands
+          return (
+          <li key={c.id} style={{ transform: held ? `translateY(${drag.dy}px)${drag.settling ? '' : ' scale(1.02)'}` : shift ? `translateY(${shift}px)` : undefined }}
+            className={`relative flex items-center gap-2 rounded-xl bg-zinc-100 p-2 dark:bg-zinc-800 ${held ? 'z-10 shadow-xl ring-2 ring-accent' + (drag.settling ? ' transition-transform duration-150' : '') : drag ? 'transition-transform duration-150' : ''}`}>
+            {edit?.id === c.id ? (
+              <form className="flex min-w-0 flex-1 gap-2" onSubmit={e => { e.preventDefault(); run(renameCategory(c.id, edit.name), () => setEdit(null)) }}>
+                <input autoFocus onFocus={e => e.currentTarget.select()} onBlur={() => setEdit(null)} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} onKeyDown={e => e.key === 'Escape' && setEdit(null)} maxLength={50} aria-label="Category name" className={cardInput} />
+                <button aria-label="Save" title="Save" onMouseDown={e => e.preventDefault() /* keep focus, or the input's blur cancels before the click lands */} className={primary}><Icon name="check" /></button>
+              </form>
+            ) : <>
+              <button aria-label={`Reorder ${c.name}`} title="Drag to reorder" className={iconBtn + ' cursor-grab touch-none select-none text-zinc-500'}
+                onPointerDown={e => {
+                  if (drag) return
+                  e.currentTarget.setPointerCapture(e.pointerId); setErr('')
+                  const li = e.currentTarget.closest('li')!
+                  setDrag({ id: c.id, from: i, to: i, y0: e.clientY, dy: 0, step: li.offsetHeight + 8 }) // 8 = the list's space-y-2
+                }}
+                onPointerMove={e => setDrag(d => {
+                  if (!d || d.settling) return d
+                  const dy = Math.min(Math.max(e.clientY - d.y0, -d.from * d.step), (cats.length - 1 - d.from) * d.step) // stay inside the list
+                  return { ...d, dy, to: Math.round(d.from + dy / d.step) }
+                })}
+                onPointerUp={() => {
+                  if (!drag || drag.settling) return
+                  const { from, to, step } = drag
+                  setDrag({ ...drag, dy: (to - from) * step, settling: true }) // glide into the slot; the save runs meanwhile, then the order swaps
+                  const n = reordered(from, to)
+                  const saved = from === to ? Promise.resolve(true) : persist(n)
+                  const glide = new Promise(r => setTimeout(r, 150))
+                  glide.then(() => { setCats(() => n); setDrag(null) })
+                  Promise.all([saved, glide]).then(([ok]) => ok || failed()) // after the swap, so the reload can't be overwritten by it
+                }}
+                onPointerCancel={() => setDrag(null)}
+                onKeyDown={e => {
+                  const d = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+                  if (d && i + d >= 0 && i + d < cats.length) { e.preventDefault(); commit(i, i + d) }
+                }}><Icon name="grip" className="size-5" /></button>
+              <span className="min-w-0 flex-1 break-words px-2 text-sm font-medium">{c.name} <span className="text-xs text-zinc-500">{favs.filter(s => s.cats?.includes(c.id)).length}</span></span>
+              <button aria-label={`Rename ${c.name}`} title="Rename" onClick={() => { setEdit(c); setErr('') }} className={iconBtn}><Icon name="edit" className="size-5" /></button>
+              <button aria-label={`Delete ${c.name}`} title="Delete" onClick={() => { setDel(c); setErr('') }} className={iconBtn + ' text-red-500'}><Icon name="trash" className="size-5" /></button>
+            </>}
+          </li>
+          )
+        })}
+      </ul>
+      <form className="flex gap-2" onSubmit={e => { e.preventDefault(); if (name.trim()) run(addCategory(name), () => setName('')) }}>
+        <input value={name} onChange={e => setName(e.target.value)} maxLength={50} placeholder="New category" aria-label="New category name" className={input} />
+        <button aria-label="Add category" title="Add category" className={primary}><Icon name="add" /></button>
+      </form>
+      {err && <p role="alert" className="text-sm text-red-500">{err}</p>}
+    </Modal>
   )
 }
 
@@ -292,8 +472,6 @@ function App() {
   const [toast, setToast] = useState<{ text: string; icon?: IconName; tone?: 'accent' | 'cloud' | 'error'; on: boolean }>({ text: '', on: false })
   const toastTimer = useRef<number>(0)
 
-  const filterable = tab === 'songs' || tab === 'singers' // saved lists only get text search
-  const activeLabel = tab === 'songs' ? (filter.singer ? filter.singer : filterName(filter)) : area > 0 ? AREAS[area] : undefined
   useEffect(() => { document.body.style.overflow = menu ? 'hidden' : '' }, [menu])
 
   // null = first poll pending. Poll results double as the server health check; the last good queue is kept while down.
@@ -309,23 +487,47 @@ function App() {
   }).catch(() => { wasDown.current = true; setOnline(false); setFails(f => f + 1) }), [])
   const [favList, setFavList] = useState<Song[]>([])
   const [history, setHistory] = useState<Song[]>([])
+  const [cats, setCats] = useState<Category[]>([])
+  const [catFilter, setCatFilter] = useState<CatFilter>('all')
+  const [modal, setModal] = useState<{ kind: 'picker'; bm: string } | { kind: 'manage' } | null>(null)
+  const pending = useRef<Promise<unknown>>(Promise.resolve()) // the latest favorite add/remove, so a category change can wait for its song to exist
   // Other devices share these lists, so reload whenever the tab changes.
-  useEffect(() => {
+  const reload = useCallback(() => {
     getList('favorites').then(l => Array.isArray(l) && setFavList(l)).catch(() => {})
     getList('history').then(l => Array.isArray(l) && setHistory(l)).catch(() => {})
-  }, [tab])
+    getCategories().then(c => Array.isArray(c) && setCats(c)).catch(() => {})
+  }, [])
+  useEffect(() => { reload() }, [tab, reload])
   const flash = (text: string, tone?: 'error') => {
     setToast({ text, tone, on: true }); clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), 2500)
   }
+  const favorite = (s: Song) => {
+    const prev = favList
+    setFavList([...prev, { sONGBM: s.sONGBM, sONGNAME: s.sONGNAME, sINGER: s.sINGER, cats: [] }]) // no cLOUD: not stored, so don't show it
+    pending.current = addFavorite(s).catch(() => { setFavList(prev); flash("Couldn't save favorite", 'error') })
+  }
+  const unfavorite = (bm: string) => {
+    const prev = favList
+    setFavList(prev.filter(f => f.sONGBM !== bm))
+    pending.current = removeFavorite(bm).catch(() => { setFavList(prev); flash("Couldn't remove favorite", 'error') })
+  }
+  const setCat = (bm: string, id: number, on: boolean) => {
+    const prev = favList
+    setFavList(l => l.map(f => f.sONGBM !== bm ? f : { ...f, cats: on ? [...(f.cats ?? []), id] : (f.cats ?? []).filter(c => c !== id) }))
+    pending.current.then(() => setSongCategory(bm, id, on)).catch(() => { setFavList(prev); flash("Couldn't save category", 'error') })
+  }
   const favs: Favs = {
     has: s => favList.some(f => f.sONGBM === s.sONGBM),
-    toggle: s => {
-      const prev = favList, on = favs.has(s)
-      setFavList(on ? prev.filter(f => f.sONGBM !== s.sONGBM) : [...prev, s])
-      ;(on ? removeFavorite(s.sONGBM!) : addFavorite(s)).catch(() => { setFavList(prev); flash("Couldn't save favorite", 'error') })
-    },
+    tap: s => { if (!favs.has(s)) favorite(s); else setModal({ kind: 'picker', bm: s.sONGBM! }) },
+    hold: s => { if (!favs.has(s)) favorite(s); setModal({ kind: 'picker', bm: s.sONGBM! }) },
   }
+  const filterable = tab === 'songs' || tab === 'singers' || tab === 'favorites' // history only gets text search
+  const catSel = catFilter === 'none' || cats.some(c => c.id === catFilter) ? catFilter : 'all' // a deleted category falls back to All
+  const activeLabel = tab === 'songs' ? (filter.singer ? filter.singer : filterName(filter))
+    : tab === 'favorites' ? (catSel === 'all' ? undefined : catSel === 'none' ? 'Uncategorized' : cats.find(c => c.id === catSel)?.name)
+    : area > 0 ? AREAS[area] : undefined
+  const shownFavs = catSel === 'all' ? favList : favList.filter(s => (catSel === 'none' ? !s.cats?.length : s.cats?.includes(catSel)))
   const record = (s: Song) => { // newest first, one entry per song; the server does the same and caps at 100
     setHistory(h => [s, ...h.filter(x => x.sONGBM !== s.sONGBM)].slice(0, 100))
     recordHistory(s).catch(() => {})
@@ -395,7 +597,7 @@ function App() {
       <div className="flex gap-6 px-3">
         <main className="min-w-0 flex-1">
           {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
-          {tab === 'favorites' && <SavedList items={favList} q={q} act={act} favs={favs} empty="No favorites yet. Tap the heart on a song to save it." />}
+          {tab === 'favorites' && <SavedList items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Tap the heart on a song to save it.'} />}
           {tab === 'history' && <SavedList items={history} q={q} act={act} favs={favs} empty="Nothing requested yet." note="Songs requested from this app, newest first. Not necessarily what played." />}
           {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
           {tab === 'queue' && <Queue items={queue.items} act={act} />}
@@ -409,14 +611,19 @@ function App() {
       {tabs('fixed inset-x-3 bottom-3 z-10 flex gap-1 rounded-2xl border border-zinc-200/70 p-1.5 shadow-xl shadow-black/10 dark:border-zinc-700/60 md:hidden ' + (opaqueBars ? 'bg-white dark:bg-zinc-900' : 'bg-white/85 backdrop-blur dark:bg-zinc-900/85'))}
       {/* same width/centering as the page container so popups line up with the header on wide screens */}
       <div className="pointer-events-none fixed inset-0 z-20 mx-auto max-w-7xl">
-      {menu === 'filter' && <FilterPanel tab={tab} filter={filter} setFilter={setFilter} area={area} setArea={setArea} close={() => setMenu(null)} />}
-      {menu === 'theme' && <SettingsPanel t={theme} />}
+      {menu === 'filter' && <FilterPanel tab={tab} filter={filter} setFilter={setFilter} area={area} setArea={setArea} cats={cats} catFilter={catSel} setCatFilter={setCatFilter} close={() => setMenu(null)} />}
+      {menu === 'theme' && <SettingsPanel t={theme} onManage={() => { setMenu(null); setModal({ kind: 'manage' }) }} />}
       {menu === 'remote' && (
         <div data-popup className="animate-pop pointer-events-auto absolute inset-x-3 bottom-[5.5rem] max-h-[calc(100dvh-10rem)] overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 md:inset-x-auto md:bottom-auto md:right-3 md:top-[4.75rem] md:max-h-[calc(100dvh-6rem)] md:w-96">
           <Remote act={act} />
         </div>
       )}
       </div>
+      {modal?.kind === 'picker' && (() => {
+        const song = favList.find(f => f.sONGBM === modal.bm)
+        return song && <CategoryPicker song={song} cats={cats} setCat={(id, on) => setCat(modal.bm, id, on)} unfavorite={() => unfavorite(modal.bm)} onEdit={() => setModal({ kind: 'manage' })} onClose={() => setModal(null)} />
+      })()}
+      {modal?.kind === 'manage' && <ManageCategories cats={cats} setCats={setCats} favs={favList} reload={reload} onClose={() => setModal(null)} />}
       <div className={`pointer-events-none fixed left-1/2 top-20 z-30 flex max-w-[90vw] -translate-x-1/2 items-center gap-2 rounded-full px-5 py-2 shadow-lg transition-all duration-300 ${toast.tone === 'error' ? 'bg-red-500 text-white' : toast.tone === 'cloud' ? 'bg-sky-500 text-white' : toast.tone === 'accent' ? 'bg-accent text-white' : 'bg-zinc-200 text-zinc-900 ring-1 ring-black/10 dark:bg-zinc-800 dark:text-zinc-100 dark:ring-white/10'} ${toast.on ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'}`}>
         {toast.icon && <Icon name={toast.icon} className="size-4 shrink-0" />}<span className="truncate">{toast.text}</span>
       </div>
