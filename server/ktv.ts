@@ -53,21 +53,49 @@ async function scan(): Promise<string[]> {
   return found.sort()
 }
 
+// The servlets only answer when given a JSONP callback name, so we ask for one and strip the wrapper.
+// Timeout (5s) stays under the client's 6s so the server logs the failure first.
+function callBox(servlet: string, params: Record<string, string>): Promise<Record<string, string>> {
+  const path = `/demo/${servlet}?${new URLSearchParams({ ...params, jsonpCallback: 'cb' })}`
+  return new Promise((resolve, reject) => {
+    const done = (body?: string) => {
+      const m = String(body ?? '').match(/^\s*cb\(([\s\S]*)\)\s*;?\s*$/)
+      try { if (!m) throw new Error('unexpected response from box'); resolve(JSON.parse(m[1])) } catch (e) { reject(e) }
+    }
+    if (MOCK) return mock(path, { writeHead() {}, end: done } as unknown as ServerResponse)
+    if (!host) return reject(new Error('no host configured'))
+    const t = new URL(host)
+    http.get({ host: t.hostname, port: t.port, path, timeout: 5000 }, r => {
+      if (r.statusCode !== 200) { r.resume(); return reject(new Error(`box HTTP ${r.statusCode}`)) }
+      let b = ''; r.on('data', d => (b += d)); r.on('end', () => done(b))
+    }).on('timeout', function (this: http.ClientRequest) { this.destroy(new Error('box timed out')) }).on('error', reject)
+  })
+}
+
+// List fields arrive as JSON strings inside the JSON.
+const rows = (d: Record<string, string>, k: string) => JSON.parse(d[k] || '[]')
+
+const fromBox = (res: ServerResponse, servlet: string, params: Record<string, string>, shape: (d: Record<string, string>) => unknown) =>
+  void callBox(servlet, params).then(d => json(res, 200, shape(d))).catch(e => {
+    console.error(`box ${servlet} failed:`, e.message)
+    json(res, e.message === 'no host configured' ? 503 : 502, { error: e.message })
+  })
+
+// Singer pictures are binary, so they are piped through instead of parsed.
+function pictureFromBox(res: ServerResponse, name: string) {
+  const path = `/demo/singer/${name}`
+  if (MOCK) return mock(path, res)
+  if (!host) return json(res, 503, { error: 'no host configured' })
+  const t = new URL(host)
+  http.get({ host: t.hostname, port: t.port, path, timeout: 8000 }, r => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res) })
+    .on('timeout', function (this: http.ClientRequest) { this.destroy() }).on('error', () => { if (!res.headersSent) json(res, 502, { error: 'unreachable' }); else res.end() })
+}
+
 const json = (res: ServerResponse, code: number, body: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
 const readBody = (req: IncomingMessage) => new Promise<string>(r => { let b = ''; req.on('data', d => (b += d)); req.on('end', () => r(b)) })
 
 export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void) {
   const url = req.url ?? ''
-  if (url.startsWith('/demo/')) {
-    if (MOCK) return mock(url, res)
-    if (!host) return json(res, 503, { error: 'no host configured' })
-    const t = new URL(host)
-    const up = http.request({ host: t.hostname, port: t.port, path: url, method: req.method, headers: { ...req.headers, host: t.host }, timeout: 8000 }, r => {
-      res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res)
-    })
-    up.on('timeout', () => up.destroy()).on('error', () => { if (!res.headersSent) json(res, 502, { error: 'unreachable' }); else res.end() })
-    return void req.pipe(up)
-  }
   if (url === '/api/host' && req.method === 'GET') return json(res, 200, { host })
   if (url === '/api/host' && req.method === 'POST') return void readBody(req).then(async b => {
     let input = ''
@@ -129,6 +157,21 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
       json(res, 200, {})
     })
   }
+  // The box's servlets are only ever called from here; the browser sees plain /api/* routes.
+  const sp = new URL(url, 'http://x').searchParams, g = (k: string) => sp.get(k) ?? ''
+  if (path === '/api/songs' && req.method === 'GET') return fromBox(res, 'SearchServlet',
+    { songName: g('q'), songType: g('songType'), singer: g('singer'), lang: g('lang'), sortType: g('sortType'), page: g('page') || '0' }, d => ({ items: rows(d, 'songList'), maxPage: +d.maxPage }))
+  if (path === '/api/singers' && req.method === 'GET') return fromBox(res, 'SingerServlet',
+    { singer: g('q'), singerType: g('type'), sortType: '', page: g('page') || '0' }, d => ({ items: rows(d, 'singerList'), maxPage: +d.maxPage }))
+  if (path === '/api/queue' && req.method === 'GET') return fromBox(res, 'PlaylistServlet', { onSelectPage: 'true' }, d => ({ items: rows(d, 'songList'), count: +d.number }))
+  if (path === '/api/queue/commands' && req.method === 'POST') return void readBody(req).then(b => {
+    let c: { cmd?: unknown; value?: unknown } = {}
+    try { c = JSON.parse(b) } catch { /* falls through to the 400 */ }
+    if (typeof c.cmd !== 'string' || !c.cmd) return json(res, 400, { error: 'expected cmd' })
+    fromBox(res, 'CommandServlet', { cmd: c.cmd, cmdValue: String(c.value ?? '') }, d => d)
+  })
+  const pic = path.match(/^\/api\/singers\/picture\/([^/]+)$/)
+  if (pic && req.method === 'GET') return pictureFromBox(res, pic[1])
   if (url === '/api/scan') return void scan().then(found => json(res, 200, { found }))
   next()
 }

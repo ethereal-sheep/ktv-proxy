@@ -1,6 +1,6 @@
 # ktv-proxy
 
-React + Vite + Tailwind front end for the Jetty KTV servlets (`/demo/*Servlet`), with a small Node server that
+React + Vite + Tailwind front end for the Jetty KTV servlets (reached only through the server's `/api/*`), with a small Node server that
 proxies the box on the same origin.
 
 ## Installation
@@ -56,8 +56,8 @@ Node 24+: `npm ci && npm run build && npm start` (`PORT`, `KTV_HOST` and `KTV_CO
 
 ## How it connects
 
-`server/ktv.ts` runs in both dev and `npm start`. It proxies `/demo/*` to the box (same origin, so no CORS or
-mixed content) and exposes `GET/POST /api/host` and `GET /api/scan` (sweeps the server's own /24 for port 8084).
+`server/ktv.ts` runs in both dev and `npm start`. It is the only thing that talks to the box's servlets (same origin for the browser, so no CORS or
+mixed content). It exposes `/api/songs`, `/api/singers`, `/api/queue`, `POST /api/queue/commands`, `/api/singers/picture/:name`, `GET/POST /api/host` and `GET /api/scan` (sweeps the server's own /24 for port 8084).
 The chosen address is saved to `ktv-config.json` (`$KTV_CONFIG`). The landing page appears on a fresh install
 or after 3 failed polls (~9s). Only LAN IPv4 addresses are accepted. The scan covers only the server's own /24,
 so a server on another VLAN won't find the box and the address has to be typed.

@@ -1,47 +1,21 @@
-const BASE = import.meta.env.VITE_API_BASE ?? '/demo/'
-
 export type Song = { sONGBM?: string; sONGNAME: string; sINGER: string; cLOUD?: number | string; xH?: string; cats?: number[] }
 export type Singer = { name: string; picture: string; qt_name?: string }
 
-// The servlets only answer when given a JSONP callback name, so we ask for one and strip the wrapper.
-async function call<T = Record<string, string>>(servlet: string, params: Record<string, string | number | boolean>): Promise<T> {
-  const q = new URLSearchParams({ ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])), jsonpCallback: 'cb' })
-  // a dead box can hang the connection rather than refuse it, so cap the wait
-  const r = await fetch(`${BASE}${servlet}?${q}`, { signal: AbortSignal.timeout(6000) })
-  if (!r.ok) throw new Error(`${servlet}: HTTP ${r.status}`)
-  const m = (await r.text()).match(/^\s*cb\(([\s\S]*)\)\s*;?\s*$/)
-  if (!m) throw new Error(`${servlet}: unexpected response`)
-  return JSON.parse(m[1])
-}
-
-// List fields arrive as JSON strings inside the JSON.
-const rows = <T,>(d: Record<string, string>, k: string): T[] => JSON.parse(d[k] || '[]')
-
 export type Filter = { songType?: string; lang?: string; sortType?: string; singer?: string }
 
-export async function searchSongs(songName: string, f: Filter, page: number) {
-  // every param is required, or the server 500s
-  const d = await call('SearchServlet', { songName, songType: '', singer: '', lang: '', sortType: '', ...f, page })
-  return { items: rows<Song>(d, 'songList'), maxPage: +d.maxPage }
+// The server talks to the box; the browser only ever sees /api/*. a dead server can hang the connection, so cap the wait.
+async function get<T>(url: string, params: Record<string, string | number> = {}): Promise<T> {
+  const r = await fetch(`${url}?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v ?? '')]))}`, { signal: AbortSignal.timeout(6000) })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(d.error ?? `${url}: HTTP ${r.status}`)
+  return d
 }
 
-export async function searchSingers(singer: string, singerType: number, page: number) {
-  const d = await call('SingerServlet', { singer, singerType, sortType: '', page })
-  return { items: rows<Singer>(d, 'singerList'), maxPage: +d.maxPage }
-}
-
-export async function getQueue() {
-  const d = await call('PlaylistServlet', { onSelectPage: true })
-  return { items: rows<Song>(d, 'songList'), count: +d.number }
-}
-
-export const command = (cmd: string, cmdValue = '') => call('CommandServlet', { cmd, cmdValue })
-export const singerImg = (p: string) => `${BASE}singer/${encodeURIComponent(p)}`
-
-// Stub: the box exposes no now-playing/play-state servlet (see recon notes), so this is always null. Implement if one turns up.
-export async function getNowPlaying(): Promise<Song | null> {
-  return null
-}
+export const searchSongs = (q: string, f: Filter, page: number) => get<{ items: Song[]; maxPage: number }>('/api/songs', { q, ...f, page })
+export const searchSingers = (q: string, type: number, page: number) => get<{ items: Singer[]; maxPage: number }>('/api/singers', { q, type, page })
+export const getQueue = () => get<{ items: Song[]; count: number }>('/api/queue')
+export const command = (cmd: string, value = '') => send('/api/queue/commands', 'POST', { cmd, value })
+export const singerImg = (p: string) => `/api/singers/picture/${encodeURIComponent(p)}`
 
 // Box address lives on the server (see server/ktv.ts), not in the browser, because the server is what talks to it.
 export const getHost = () => fetch('/api/host').then(r => r.json()).then(d => d.host as string | null)
