@@ -64,6 +64,6 @@ so a server on another VLAN won't find the box and the address has to be typed.
 
 Favorites and history (the box has neither) live in `ktv.db`, a SQLite file beside the config, using Node's built-in
 `node:sqlite`. History is a log of songs requested from this app, not of what played. Cloud status is not stored.
-Favorites can be grouped into categories (stored in the same file): tap the heart on a favorite, or hold it on a new
-song, to pick categories. Add, rename and delete categories under Settings → Manage categories.
+Favorites can be grouped into categories (stored in the same file): hold a song to pick its categories (double-tap
+to favorite it). Add, rename and delete categories under Settings → Manage categories.
 `npm run dev:mock` fakes the box from the gitignored `mock/` folder.

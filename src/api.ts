@@ -15,11 +15,12 @@ export const searchSongs = (q: string, f: Filter, page: number) => get<{ items: 
 export const searchSingers = (q: string, type: number, page: number) => get<{ items: Singer[]; maxPage: number }>('/api/singers', { q, type, page })
 export const getQueue = () => get<{ items: Song[]; count: number }>('/api/queue')
 // One entry point for every box action; queue edits go to /api/queue/songs, the rest are remote-control buttons under /api/player.
-export const command = (action: string, value = '') => {
+export const command = (action: string, value = '', info?: Song) => {
   const song = `/api/queue/songs/${encodeURIComponent(value)}`
   switch (action) {
-    case 'add-song': return send('/api/queue/songs', 'POST', { id: value })
-    case 'play-song-next': return send('/api/queue/songs', 'POST', { id: value, next: true })
+    // The server can't see cloud songs while they download, so it needs to know which adds are cloud and what song they are.
+    case 'add-song': return send('/api/queue/songs', 'POST', { id: value, cloud: !!Number(info?.cLOUD), song: info })
+    case 'play-song-next': return send('/api/queue/songs', 'POST', { id: value, next: true, cloud: !!Number(info?.cLOUD), song: info })
     case 'move-next': return send(song, 'POST')
     case 'remove': return send(song, 'DELETE')
     default: return send(`/api/player/${action}`, 'POST')

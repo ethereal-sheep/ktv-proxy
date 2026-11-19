@@ -55,18 +55,36 @@ function Status({ state, empty, hasMore, more, retry }: { state: string; empty: 
 }
 
 type Act = (action: string, val?: string, label?: string, icon?: IconName, song?: Song) => void
-// tap: favorite it, or (if already a favorite) open its category picker. hold: favorite it if needed, then open the picker.
-type Favs = { has: (s: Song) => boolean; tap: (s: Song) => void; hold: (s: Song) => void }
+// open: show the category picker (which also favorites/unfavorites; hold). add: favorite it (double tap); true if it did.
+type Favs = { has: (s: Song) => boolean; open: (s: Song) => void; add: (s: Song) => boolean }
 
-// A hold (500 ms) or right-click fires onLong and swallows the click that follows; a plain click fires onTap.
-function useHold(onTap: () => void, onLong: () => void) {
-  const timer = useRef(0), held = useRef(false)
-  const cancel = () => clearTimeout(timer.current)
+// Row gestures: hold (500 ms, or right-click) fires onHold and swallows the click after it; two clicks within 300 ms fire onDouble.
+// `holding` turns on shortly after the press (not at once, so double taps don't flash it) while a hold builds up. Presses on the row's own buttons are ignored.
+const HOLD_MS = 500
+function useRowGesture(onHold: () => void, onDouble: (x: number, y: number) => void) {
+  const [holding, setHolding] = useState(false)
+  const timer = useRef(0), show = useRef(0), held = useRef(false), last = useRef(0), from = useRef([0, 0])
+  const stop = () => { clearTimeout(timer.current); clearTimeout(show.current); setHolding(false) }
+  const fire = () => { held.current = true; stop(); onHold() }
+  const own = (e: React.SyntheticEvent) => !!(e.target as HTMLElement).closest('button')
   return {
-    onPointerDown: () => { held.current = false; cancel(); timer.current = window.setTimeout(() => { held.current = true; onLong() }, 500) },
-    onPointerUp: cancel, onPointerLeave: cancel, onPointerCancel: cancel,
-    onClick: () => { if (!held.current) onTap(); held.current = false },
-    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (!held.current) { held.current = true; cancel(); onLong() } }, // touch long-press also fires this
+    holding,
+    handlers: {
+      onPointerDown: (e: React.PointerEvent) => {
+        if (own(e)) return
+        held.current = false; from.current = [e.clientX, e.clientY]
+        stop(); timer.current = window.setTimeout(fire, HOLD_MS); show.current = window.setTimeout(() => setHolding(true), 150)
+      },
+      onPointerMove: (e: React.PointerEvent) => { if (Math.hypot(e.clientX - from.current[0], e.clientY - from.current[1]) > 10) stop() }, // it's a scroll or drag
+      onPointerUp: stop, onPointerLeave: stop, onPointerCancel: stop,
+      onClick: (e: React.MouseEvent) => {
+        if (own(e)) return
+        if (held.current) { held.current = false; return }
+        const now = Date.now()
+        if (now - last.current < 300) { last.current = 0; onDouble(e.clientX, e.clientY) } else last.current = now
+      },
+      onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (!held.current) fire() }, // touch long-press raises this too
+    },
   }
 }
 
@@ -81,11 +99,18 @@ function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; 
   const lbl = (t: string) => helperLabels && <span className="text-[10px] font-normal leading-none">{t}</span>
   const col = ' flex flex-col items-center gap-1'
   const cloud = String(s.cLOUD) === '1'
-  const hold = useHold(() => favs?.tap(s), () => favs?.hold(s))
+  const [pop, setPop] = useState<{ x: number; y: number } | null>(null) // where the double tap landed; plays the heart animation
+  const g = useRowGesture(() => favs?.open(s), (x, y) => { if (favs?.add(s)) setPop({ x, y }) })
+  const liked = !queue && !!favs?.has(s)
   const singers = s.sINGER.split(/\s*,\s*/).filter(Boolean) // the box joins co-singers with a bare comma; wrap between singers, not inside a name
   return (
-    <li className={`relative flex items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-shadow hover:shadow-md dark:bg-zinc-900`}>
-      {cloud && <span title="Cloud song: downloads when requested" className="absolute -left-1 -top-2 z-[1] flex items-center gap-1 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-500 drop-shadow"><Icon name="cloud" className="size-5 fill-current" />{helperLabels && <span>Cloud</span>}</span>}
+    <li {...(queue || !favs ? {} : g.handlers)} tabIndex={queue || !favs ? undefined : 0} onKeyDown={e => e.key === 'Enter' && e.target === e.currentTarget && favs?.open(s)}
+      className={`relative flex touch-manipulation select-none items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-[box-shadow,background-color] hover:shadow-md dark:bg-zinc-900 ${g.holding ? 'bg-accent/5 ring-2 ring-accent/40 duration-300' : 'duration-150'}`}>
+      {(liked || cloud) && <span className="absolute -left-1 -top-2 z-[1] flex items-center gap-1 drop-shadow">
+        {liked && <Icon name="favorites" className={`size-5 fill-current text-pink-500 ${pop ? 'animate-heart-pop' : ''}`} />}
+        {cloud && <span title="Cloud song: downloads when requested" className="flex items-center gap-1 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-500"><Icon name="cloud" className="size-5 fill-current" />{helperLabels && <span>Cloud</span>}</span>}
+      </span>}
+      {pop && <div onAnimationEnd={() => setPop(null)} style={{ left: pop.x, top: pop.y }} className="animate-heart-burst pointer-events-none fixed z-[2] -ml-6 -mt-6 text-pink-500"><Icon name="favorites" className="size-12 fill-current" /></div> /* fixed: an absolute one could stretch the page */}
       <div className="min-w-0 flex-1">
         <div style={fit(s.sONGNAME, 16, 34, 13)} className="break-words font-medium leading-snug">{s.sONGNAME}</div>
         <div style={fit(s.sINGER, 14, 40, 11)} className="break-words text-zinc-500">{singers.map((n, i) => <span key={i}><span className="inline-block max-w-full">{n}{i < singers.length - 1 && ','}</span>{' '}</span>)}</div>
@@ -94,7 +119,6 @@ function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; 
         <button className={btn + col} title="Play next" onClick={() => act('move-next', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
         <button className={btn + col} title="Remove" onClick={() => act('remove', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
       </> : <>
-        {favs && <button className={btn + col + ' select-none'} title={favs.has(s) ? 'Categories' : 'Add to favorites (hold to pick categories)'} aria-pressed={favs.has(s)} {...hold}><Icon name="favorites" className={favs.has(s) ? 'size-5 fill-current text-accent' : 'size-5'} />{lbl('Fav')}</button>}
         <button className={btn + col} title="Play next" onClick={() => act('play-song-next', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next', s)}><Icon name="next" />{lbl('Next')}</button>
         <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('add-song', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add', s)}><Icon name="add" />{lbl('Add')}</button>
       </>}
@@ -122,7 +146,7 @@ function FilterPanel({ tab, filter, setFilter, area, setArea, cats, catFilter, s
          <Pill key={n} on={fkey(f) === fkey(filter)} onClick={() => { setFilter(f); close() }}>{n}</Pill>)])]
     : [['Region', AREAS.map((n, i) => <Pill key={n} on={i === area} onClick={() => { setArea(i); close() }}>{n}</Pill>)]]
   return (
-    <div data-popup className="animate-pop pointer-events-auto absolute inset-x-3 top-[4.75rem] max-h-[calc(100dvh-10.25rem)] space-y-4 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 pb-5 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 sm:inset-x-auto sm:left-1/2 sm:w-[36rem] sm:max-w-[calc(100vw-1.5rem)] sm:-translate-x-1/2 md:max-h-[calc(100dvh-7rem)]">
+    <div data-popup className="animate-pop pointer-events-auto mt-16 max-h-[calc(100%-4rem)] w-full max-w-xl space-y-4 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 pb-5 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 self-start md:absolute md:left-1/2 md:top-[4.75rem] md:mt-0 md:max-h-[calc(100dvh-7rem)] md:w-[36rem] md:max-w-[calc(100vw-1.5rem)] md:-translate-x-1/2">
       {groups.map(([g, pills]) => (
         <section key={g}>{g && <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">{g}</h3>}
           <div className="flex flex-wrap gap-2">{pills}</div></section>
@@ -171,7 +195,7 @@ function Songs({ q, act, filter, epoch, favs }: { q: string; act: Act; filter: F
   const p = usePaged(page => searchSongs(q, filter, page), [q, fkey(filter), epoch], s => s.sONGBM)
   return (
     <>
-      <ul className="grid gap-2 xl:grid-cols-2">{p.items.map((s, i) => <SongRow key={`${s.sONGBM}-${i}`} s={s} act={act} favs={favs} />)}</ul>
+      <ul className="grid gap-2 pt-2 xl:grid-cols-2">{p.items.map((s, i) => <SongRow key={`${s.sONGBM}-${i}`} s={s} act={act} favs={favs} />)}</ul>
       <Status state={p.state} empty={!p.items.length} hasMore={p.hasMore} more={p.more} retry={p.retry} />
     </>
   )
@@ -182,7 +206,7 @@ function SavedList({ items, q, act, favs, empty, note }: { items: Song[]; q: str
   if (!items.length) return <p className="p-6 text-center text-zinc-500">{empty}</p>
   items = n ? items.filter(s => (s.sONGNAME + ' ' + s.sINGER).toLowerCase().includes(n)) : items
   if (!items.length) return <p className="p-6 text-center text-zinc-500">Nothing found.</p>
-  return <>{note && <p className="mb-2 px-1 text-xs text-zinc-500">{note}</p>}<ul className="grid gap-2 xl:grid-cols-2">{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul></>
+  return <>{note && <p className="mb-2 px-1 text-xs text-zinc-500">{note}</p>}<ul className="grid gap-2 pt-2 xl:grid-cols-2">{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul></>
 }
 
 function SingerCard({ s, onPick }: { s: Singer; onPick: () => void }) {
@@ -264,7 +288,7 @@ function SettingsMenu({ open, setOpen }: { open: boolean; setOpen: (o: boolean) 
 function SettingsPanel({ t, onManage }: { t: ReturnType<typeof useTheme>; onManage: () => void }) {
   const st = useContext(SettingsCtx) as ReturnType<typeof useSettingsState>
   return (
-    <div data-popup className="animate-pop pointer-events-auto absolute right-3 top-[4.75rem] w-64 max-w-[calc(100vw-1.5rem)] space-y-3 rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10">
+    <div data-popup className="animate-pop pointer-events-auto ml-auto mt-16 max-h-[calc(100%-4rem)] w-64 max-w-full space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 self-start md:absolute md:right-3 md:top-[4.75rem] md:ml-0 md:mt-0 md:max-h-none md:max-w-[calc(100vw-1.5rem)] md:overflow-visible">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Style</h3>
       <div className="flex gap-1">
         {(['system', 'light', 'dark'] as Mode[]).map(m => (
@@ -291,12 +315,31 @@ function SettingsPanel({ t, onManage }: { t: ReturnType<typeof useTheme>; onMana
   )
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+// A tap that closes a popup by its backdrop must not also click whatever sits under it (the close happens on pointerdown, the click comes after).
+const swallowNextClick = () => {
+  const stop = (e: Event) => e.stopPropagation()
+  window.addEventListener('click', stop, { capture: true, once: true })
+  setTimeout(() => window.removeEventListener('click', stop, true), 400) // no click followed (e.g. a scroll), so don't eat a later one
+}
+
+function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode }) {
+  // On phones the on-screen keyboard (or a bottom URL bar) covers part of the layout viewport; fit the visual viewport instead.
+  const [vv, setVv] = useState<{ top: number; height: number } | null>(null)
+  useEffect(() => {
+    const v = window.visualViewport
+    if (!v) return
+    const f = () => setVv({ top: v.offsetTop, height: v.height })
+    f(); v.addEventListener('resize', f); v.addEventListener('scroll', f)
+    return () => { v.removeEventListener('resize', f); v.removeEventListener('scroll', f) }
+  }, [])
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-3 sm:items-center" onPointerDown={e => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-label={title} className="animate-pop max-h-[85dvh] w-full max-w-sm space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10">
+    <div style={vv ? { top: vv.top, height: vv.height, bottom: 'auto' } : undefined} className={`fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-3`} onPointerDown={e => { if (e.target === e.currentTarget) { swallowNextClick(); onClose() } }}>
+      <div role="dialog" aria-label={title} className="animate-pop max-h-full w-full max-w-sm space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="min-w-0 break-words font-semibold">{title}</h3>
+          <div className="min-w-0">
+            <h3 className="break-words font-semibold">{title}</h3>
+            {subtitle && <p className="break-words text-sm text-zinc-500">{subtitle}</p>}
+          </div>
           <button aria-label="Close" onClick={onClose} className="rounded-lg p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="remove" className="size-4" /></button>
         </div>
         {children}
@@ -307,24 +350,22 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 
 const nSongs = (n: number) => `${n} song${n === 1 ? '' : 's'}`
 
-function CategoryPicker({ song, cats, setCat, unfavorite, onEdit, onClose }: { song: Song; cats: Category[]; setCat: (id: number, on: boolean) => void; unfavorite: () => void; onEdit: () => void; onClose: () => void }) {
-  const [sure, setSure] = useState(false) // first tap arms the button, second tap removes
+// song may not be a favorite yet (fav is undefined); picking a category or the heart favorites it.
+function CategoryPicker({ song, fav, cats, setCat, toggle, onEdit, onClose }: { song: Song; fav?: Song; cats: Category[]; setCat: (id: number, on: boolean) => void; toggle: () => void; onEdit: () => void; onClose: () => void }) {
   return (
-    <Modal title={song.sONGNAME} onClose={onClose}>
+    <Modal title={song.sONGNAME} subtitle={song.sINGER} onClose={onClose}>
       <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500"><Icon name="tag" className="size-3.5" />Categories</h4>
       {cats.length ? (
         <div className="flex flex-wrap gap-2">
-          {cats.map(c => { const on = !!song.cats?.includes(c.id); return (
+          {cats.map(c => { const on = !!fav?.cats?.includes(c.id); return (
             <button key={c.id} aria-pressed={on} onClick={() => setCat(c.id, !on)} className={`rounded-xl px-3 py-2 text-sm transition duration-150 active:scale-95 ${on ? 'bg-accent text-white hover:brightness-110' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{c.name}</button>) })}
         </div>
       ) : <p className="text-sm text-zinc-500">No categories yet. Use Edit categories to add some.</p>}
       <div className="flex gap-2">
         <button onClick={onEdit} className={btn + ' flex flex-1 items-center justify-center gap-2'}><Icon name="edit" className="size-4" />Edit categories</button>
-        {/* looks like the row's favorite button; first tap arms it (red, broken heart, ?), second tap removes */}
-        {sure
-          ? <button aria-label="Tap again to remove from favorites" title="Tap again to remove from favorites" onClick={() => { unfavorite(); onClose() }} onBlur={() => setSure(false)} autoFocus
-              className="flex w-[4.5rem] items-center justify-center gap-1 rounded-xl bg-red-500 py-3 text-white transition duration-150 hover:brightness-110 active:scale-90"><Icon name="unfav" /><span className="text-base font-bold leading-none">?</span></button>
-          : <button aria-label="Remove from favorites" title="Remove from favorites"  onClick={() => setSure(true)} className={btn + ' flex w-[4.5rem] items-center justify-center !px-0'}><Icon name="favorites" className="size-5 fill-current text-accent" /></button>}
+        <button aria-pressed={!!fav} aria-label={fav ? 'Remove from favorites' : 'Add to favorites'} title={fav ? 'Remove from favorites' : 'Add to favorites'} onClick={toggle} className="flex items-center justify-center rounded-xl bg-zinc-200 px-4 py-3 transition duration-150 hover:bg-zinc-300 active:scale-95 dark:bg-zinc-800 dark:hover:bg-zinc-700">
+          <Icon name="favorites" className={fav ? 'size-5 fill-current text-pink-500' : 'size-5 text-zinc-500'} />
+        </button>
       </div>
     </Modal>
   )
@@ -464,7 +505,12 @@ function App() {
   const [area, setArea] = useState(0)
   const [menu, setMenu] = useState<'filter' | 'theme' | 'remote' | null>(null)
   useEffect(() => {
-    const h = (e: PointerEvent) => !(e.target as Element).closest('[data-popup]') && setMenu(null)
+    const h = (e: PointerEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-popup]')) return
+      if (t.dataset.dim !== undefined) swallowNextClick() // the dimmed backdrop on phones
+      setMenu(null)
+    }
     document.addEventListener('pointerdown', h)
     return () => document.removeEventListener('pointerdown', h)
   }, [])
@@ -472,7 +518,8 @@ function App() {
   const [toast, setToast] = useState<{ text: string; icon?: IconName; tone?: 'accent' | 'cloud' | 'error'; on: boolean }>({ text: '', on: false })
   const toastTimer = useRef<number>(0)
 
-  useEffect(() => { document.body.style.overflow = menu ? 'hidden' : '' }, [menu])
+  // Lock page scroll behind a popup on desktop only: on phones a locked body makes the browser bring back its URL bar, so the dim layer (touch-none) blocks scrolling there instead.
+  useEffect(() => { document.body.style.overflow = menu && window.matchMedia('(min-width: 768px)').matches ? 'hidden' : '' }, [menu])
 
   // null = first poll pending. Poll results double as the server health check; the last good queue is kept while down.
   const [online, setOnline] = useState<boolean | null>(null)
@@ -489,7 +536,7 @@ function App() {
   const [history, setHistory] = useState<Song[]>([])
   const [cats, setCats] = useState<Category[]>([])
   const [catFilter, setCatFilter] = useState<CatFilter>('all')
-  const [modal, setModal] = useState<{ kind: 'picker'; bm: string } | { kind: 'manage' } | null>(null)
+  const [modal, setModal] = useState<{ kind: 'picker'; song: Song } | { kind: 'manage' } | null>(null)
   const pending = useRef<Promise<unknown>>(Promise.resolve()) // the latest favorite add/remove, so a category change can wait for its song to exist
   // Other devices share these lists, so reload whenever the tab changes.
   const reload = useCallback(() => {
@@ -512,15 +559,23 @@ function App() {
     setFavList(prev.filter(f => f.sONGBM !== bm))
     pending.current = removeFavorite(bm).catch(() => { setFavList(prev); flash("Couldn't remove favorite", 'error') })
   }
-  const setCat = (bm: string, id: number, on: boolean) => {
+  const setCat = (song: Song, id: number, on: boolean) => {
+    const bm = song.sONGBM!
     const prev = favList
+    if (!favList.some(f => f.sONGBM === bm)) favorite(song) // picking a category favorites the song
     setFavList(l => l.map(f => f.sONGBM !== bm ? f : { ...f, cats: on ? [...(f.cats ?? []), id] : (f.cats ?? []).filter(c => c !== id) }))
     pending.current.then(() => setSongCategory(bm, id, on)).catch(() => { setFavList(prev); flash("Couldn't save category", 'error') })
   }
+  const isCloud = (s: Song) => String(s.cLOUD) === '1'
   const favs: Favs = {
     has: s => favList.some(f => f.sONGBM === s.sONGBM),
-    tap: s => { if (!favs.has(s)) favorite(s); else setModal({ kind: 'picker', bm: s.sONGBM! }) },
-    hold: s => { if (!favs.has(s)) favorite(s); setModal({ kind: 'picker', bm: s.sONGBM! }) },
+    // cloud songs lose their cloud flag once stored (it goes stale), so they can't be favorited yet; an existing favorite can still be managed
+    open: s => favs.has(s) || !isCloud(s) ? setModal({ kind: 'picker', song: s }) : flash("Cloud songs can't be favorited yet"),
+    add: s => {
+      if (favs.has(s)) return false
+      if (isCloud(s)) { flash("Cloud songs can't be favorited yet"); return false }
+      favorite(s); return true
+    },
   }
   const filterable = tab === 'songs' || tab === 'singers' || tab === 'favorites' // history only gets text search
   const catSel = catFilter === 'none' || cats.some(c => c.id === catFilter) ? catFilter : 'all' // a deleted category falls back to All
@@ -542,10 +597,10 @@ function App() {
       clearTimeout(toastTimer.current)
       toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), longPopups ? 4500 : 2500)
     }
-    command(action, val).then(() => { show(label ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
+    command(action, val, song).then(() => { show(label ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
   }
 
-  const item = (on: boolean, extra = '') => `flex flex-1 flex-col items-center gap-0.5 rounded-xl px-4 py-1.5 text-xs transition duration-150 active:scale-95 md:flex-none md:flex-row md:gap-2 md:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
+  const item = (on: boolean, extra = '') => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] transition duration-150 active:scale-95 md:flex-none md:flex-row md:gap-2 md:px-4 md:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
   const tabs = (cls: string) => (
     <nav className={cls}>
       {TABS.map(([k, label]) => (
@@ -568,7 +623,7 @@ function App() {
 
   return (
     <div className="mx-auto min-h-dvh max-w-7xl pb-28 md:pb-6">
-      {menu && <div className="animate-fade pointer-events-none fixed inset-0 z-[5] bg-black/40 max-md:pointer-events-auto" />}
+      {menu && <div data-dim className="animate-fade pointer-events-none fixed inset-0 z-[15] bg-black/40 max-md:pointer-events-auto max-md:touch-none md:z-[5]" />}
       <header className={`sticky top-0 z-10 flex items-center gap-3 p-3 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
         <h1 className="hidden text-lg font-bold text-accent sm:block">KTV</h1>
         {tabs('hidden md:flex md:gap-2')}
@@ -597,7 +652,7 @@ function App() {
       <div className="flex gap-6 px-3">
         <main className="min-w-0 flex-1">
           {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
-          {tab === 'favorites' && <SavedList items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Tap the heart on a song to save it.'} />}
+          {tab === 'favorites' && <SavedList items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
           {tab === 'history' && <SavedList items={history} q={q} act={act} favs={favs} empty="Nothing requested yet." note="Songs requested from this app, newest first. Not necessarily what played." />}
           {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
           {tab === 'queue' && <Queue items={queue.items} act={act} />}
@@ -609,19 +664,19 @@ function App() {
       </div>
 
       {tabs('fixed inset-x-3 bottom-3 z-10 flex gap-1 rounded-2xl border border-zinc-200/70 p-1.5 shadow-xl shadow-black/10 dark:border-zinc-700/60 md:hidden ' + (opaqueBars ? 'bg-white dark:bg-zinc-900' : 'bg-white/85 backdrop-blur dark:bg-zinc-900/85'))}
-      {/* same width/centering as the page container so popups line up with the header on wide screens */}
-      <div className="pointer-events-none fixed inset-0 z-20 mx-auto max-w-7xl">
+      {/* md+: same width/centering as the page container so popups line up with the header. Phones: popups are flex children above the toolbar, like Modal */}
+      <div className="pointer-events-none fixed inset-0 z-20 mx-auto max-w-7xl max-md:flex max-md:items-end max-md:justify-center max-md:p-3 max-md:pb-[5.5rem]">
       {menu === 'filter' && <FilterPanel tab={tab} filter={filter} setFilter={setFilter} area={area} setArea={setArea} cats={cats} catFilter={catSel} setCatFilter={setCatFilter} close={() => setMenu(null)} />}
       {menu === 'theme' && <SettingsPanel t={theme} onManage={() => { setMenu(null); setModal({ kind: 'manage' }) }} />}
       {menu === 'remote' && (
-        <div data-popup className="animate-pop pointer-events-auto absolute inset-x-3 bottom-[5.5rem] max-h-[calc(100dvh-10rem)] overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 md:inset-x-auto md:bottom-auto md:right-3 md:top-[4.75rem] md:max-h-[calc(100dvh-6rem)] md:w-96">
+        <div data-popup className="animate-pop pointer-events-auto max-h-full w-full max-w-sm overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 md:absolute md:right-3 md:top-[4.75rem] md:max-h-[calc(100dvh-6rem)] md:w-96">
           <Remote act={act} />
         </div>
       )}
       </div>
       {modal?.kind === 'picker' && (() => {
-        const song = favList.find(f => f.sONGBM === modal.bm)
-        return song && <CategoryPicker song={song} cats={cats} setCat={(id, on) => setCat(modal.bm, id, on)} unfavorite={() => unfavorite(modal.bm)} onEdit={() => setModal({ kind: 'manage' })} onClose={() => setModal(null)} />
+        const song = modal.song, fav = favList.find(f => f.sONGBM === song.sONGBM)
+        return <CategoryPicker song={song} fav={fav} cats={cats} setCat={(id, on) => setCat(song, id, on)} toggle={() => fav ? unfavorite(song.sONGBM!) : favorite(song)} onEdit={() => setModal({ kind: 'manage' })} onClose={() => setModal(null)} />
       })()}
       {modal?.kind === 'manage' && <ManageCategories cats={cats} setCats={setCats} favs={favList} reload={reload} onClose={() => setModal(null)} />}
       <div className={`pointer-events-none fixed left-1/2 top-20 z-30 flex max-w-[90vw] -translate-x-1/2 items-center gap-2 rounded-full px-5 py-2 shadow-lg transition-all duration-300 ${toast.tone === 'error' ? 'bg-red-500 text-white' : toast.tone === 'cloud' ? 'bg-sky-500 text-white' : toast.tone === 'accent' ? 'bg-accent text-white' : 'bg-zinc-200 text-zinc-900 ring-1 ring-black/10 dark:bg-zinc-800 dark:text-zinc-100 dark:ring-white/10'} ${toast.on ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'}`}>
