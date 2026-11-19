@@ -2,13 +2,22 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { addFavorite, isSong, listSongs, recordHistory, removeFavorite, setDbDir } from './db.ts'
 
 const PORT = 8084
 const PROBE = '/demo/PlaylistServlet?onSelectPage=true&jsonpCallback=cb'
-const CONFIG = process.env.KTV_CONFIG ?? 'ktv-config.json'
 
-let host: string | null = process.env.KTV_HOST ?? null
-try { host = JSON.parse(readFileSync(CONFIG, 'utf8')).host ?? host } catch { /* no saved config yet */ }
+// Local debug only (npm run dev:mock): a fake box from ./mock/. Its favorites/history go to mock/data/ (gitignored), never the real db.
+const MOCK = process.env.KTV_MOCK === '1' && process.env.NODE_ENV !== 'production'
+const CONFIG = process.env.KTV_CONFIG ?? (MOCK ? 'mock/data/config.json' : 'ktv-config.json')
+setDbDir(dirname(CONFIG)) // the db sits beside the config, so it shares its volume
+const mockUrl: string = pathToFileURL(join(import.meta.dirname, '..', 'mock', 'mock.ts')).href // a variable, so tsc doesn't need the file to exist
+const mock: (url: string, res: ServerResponse) => void = MOCK ? (await import(mockUrl)).mock : () => {}
+
+let host: string | null = MOCK ? 'http://mock:8084' : process.env.KTV_HOST ?? null
+if (!MOCK) try { host = JSON.parse(readFileSync(CONFIG, 'utf8')).host ?? host } catch { /* no saved config yet */ }
 
 // Only LAN addresses: this endpoint makes the server fetch from whatever it is given.
 const isLan = (ip: string) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.)/.test(ip)
@@ -50,6 +59,7 @@ const readBody = (req: IncomingMessage) => new Promise<string>(r => { let b = ''
 export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void) {
   const url = req.url ?? ''
   if (url.startsWith('/demo/')) {
+    if (MOCK) return mock(url, res)
     if (!host) return json(res, 503, { error: 'no host configured' })
     const t = new URL(host)
     const up = http.request({ host: t.hostname, port: t.port, path: url, method: req.method, headers: { ...req.headers, host: t.host }, timeout: 8000 }, r => {
@@ -69,6 +79,20 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     try { writeFileSync(CONFIG, JSON.stringify({ host })) } catch (e) { console.error('could not save config', e) }
     json(res, 200, { host })
   })
+  // Favorites and history live in SQLite (server/db.ts); each action is one row operation, so devices can't overwrite each other's lists.
+  const list = url.match(/^\/api\/(favorites|history)(?:\/([^/]+))?$/)
+  if (list) {
+    const [, name, bm] = list
+    if (req.method === 'GET' && !bm) return json(res, 200, listSongs(name as 'favorites' | 'history'))
+    if (req.method === 'DELETE' && bm && name === 'favorites') { removeFavorite(decodeURIComponent(bm)); return json(res, 200, {}) }
+    if (req.method === 'POST' && !bm) return void readBody(req).then(b => {
+      let song: unknown
+      try { song = JSON.parse(b) } catch { /* falls through to the 400 */ }
+      if (!isSong(song)) return json(res, 400, { error: 'expected a song' })
+      try { (name === 'favorites' ? addFavorite : recordHistory)(song) } catch (e) { console.error('could not save ' + name, e); return json(res, 500, { error: 'could not save' }) }
+      json(res, 200, {})
+    })
+  }
   if (url === '/api/scan') return void scan().then(found => json(res, 200, { found }))
   next()
 }

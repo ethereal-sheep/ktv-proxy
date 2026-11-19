@@ -52,3 +52,13 @@ export async function setHost(host: string): Promise<string> {
   return d.host
 }
 export const scanNetwork = () => fetch('/api/scan').then(r => r.json()).then(d => d.found as string[])
+
+// Favorites and history live in the front-end server's SQLite db (the box has neither). Cloud status is not stored: it goes stale.
+export type ListName = 'favorites' | 'history'
+const slim = ({ sONGBM, sONGNAME, sINGER }: Song) => ({ sONGBM, sONGNAME, sINGER })
+const send = (url: string, method: string, body?: unknown) =>
+  fetch(url, { method, body: body === undefined ? undefined : JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`${method} ${url}: HTTP ${r.status}`) })
+export const getList = (name: ListName) => fetch(`/api/${name}`).then(r => r.json() as Promise<Song[]>)
+export const addFavorite = (s: Song) => send('/api/favorites', 'POST', slim(s))
+export const removeFavorite = (bm: string) => send(`/api/favorites/${encodeURIComponent(bm)}`, 'DELETE')
+export const recordHistory = (s: Song) => send('/api/history', 'POST', slim(s))

@@ -61,3 +61,7 @@ mixed content) and exposes `GET/POST /api/host` and `GET /api/scan` (sweeps the 
 The chosen address is saved to `ktv-config.json` (`$KTV_CONFIG`). The landing page appears on a fresh install
 or after 3 failed polls (~9s). Only LAN IPv4 addresses are accepted. The scan covers only the server's own /24,
 so a server on another VLAN won't find the box and the address has to be typed.
+
+Favorites and history (the box has neither) live in `ktv.db`, a SQLite file beside the config, using Node's built-in
+`node:sqlite`. History is a log of songs requested from this app, not of what played. Cloud status is not stored.
+`npm run dev:mock` fakes the box from the gitignored `mock/` folder.

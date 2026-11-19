@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { command, getHost, getQueue, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Filter, type Singer, type Song } from './api'
+import { addFavorite, command, getHost, getList, getQueue, recordHistory, removeFavorite, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
 
@@ -17,7 +17,7 @@ const filterName = (f: Filter) => FILTERS.flatMap(([, i]) => i).find(([, x]) => 
 const btn = 'rounded-xl bg-zinc-200 px-4 py-3 text-sm font-medium active:bg-accent active:text-white hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 transition duration-150 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-90'
 
 // Debounced, paged fetch; stale responses are dropped.
-function usePaged<T>(fetcher: (page: number) => Promise<{ items: T[]; maxPage: number }>, deps: unknown[]) {
+function usePaged<T>(fetcher: (page: number) => Promise<{ items: T[]; maxPage: number }>, deps: unknown[], keyOf?: (t: T) => unknown) {
   const [items, setItems] = useState<T[]>([])
   const [page, setPage] = useState(0)
   const [maxPage, setMax] = useState(0)
@@ -28,9 +28,10 @@ function usePaged<T>(fetcher: (page: number) => Promise<{ items: T[]; maxPage: n
     const id = ++req.current
     tried.current = p
     setState('loading')
-    fetcher(p).then(r => {
+    fetcher(p).then(r => { // keyOf: pages can repeat a row
       if (id !== req.current) return
-      setItems(prev => (p ? [...prev, ...r.items] : r.items)); setPage(p); setMax(r.maxPage); setState('idle')
+      setItems(prev => { const all = p ? [...prev, ...r.items] : r.items; return keyOf ? [...new Map(all.map(t => [keyOf(t), t])).values()] : all });
+      setPage(p); setMax(r.maxPage); setState('idle')
     }).catch(() => id === req.current && setState('error'))
   }
   useEffect(() => { const t = setTimeout(() => load(0), 250); return () => clearTimeout(t) }, deps) // eslint-disable-line
@@ -52,7 +53,8 @@ function Status({ state, empty, hasMore, more, retry }: { state: string; empty: 
   return <div ref={el} className="h-8" />
 }
 
-type Act = (cmd: string, val?: string, label?: string, icon?: IconName) => void
+type Act = (cmd: string, val?: string, label?: string, icon?: IconName, song?: Song) => void
+type Favs = { has: (s: Song) => boolean; toggle: (s: Song) => void }
 
 // Scale font down continuously once text passes `from` width units (CJK glyphs count double), never below `min` px.
 const fit = (t: string, base: number, from: number, min: number) => {
@@ -60,7 +62,7 @@ const fit = (t: string, base: number, from: number, min: number) => {
   return { fontSize: Math.max(min, Math.min(base, (base * from) / w)) }
 }
 
-function SongRow({ s, act, queue }: { s: Song; act: Act; queue?: boolean }) {
+function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; favs?: Favs }) {
   const { helperLabels } = useContext(SettingsCtx)
   const lbl = (t: string) => helperLabels && <span className="text-[10px] font-normal leading-none">{t}</span>
   const col = ' flex flex-col items-center gap-1'
@@ -77,8 +79,9 @@ function SongRow({ s, act, queue }: { s: Song; act: Act; queue?: boolean }) {
         <button className={btn + col} title="Play next" onClick={() => act('Pro2', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
         <button className={btn + col} title="Remove" onClick={() => act('Del1', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
       </> : <>
-        <button className={btn + col} title="Play next" onClick={() => act('Pro1', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next')}><Icon name="next" />{lbl('Next')}</button>
-        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('Add1', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add')}><Icon name="add" />{lbl('Add')}</button>
+        {favs && <button className={btn + col} title={favs.has(s) ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={favs.has(s)} onClick={() => favs.toggle(s)}><Icon name="favorites" className={favs.has(s) ? 'size-5 fill-current text-accent' : 'size-5'} />{lbl('Fav')}</button>}
+        <button className={btn + col} title="Play next" onClick={() => act('Pro1', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next', s)}><Icon name="next" />{lbl('Next')}</button>
+        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('Add1', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add', s)}><Icon name="add" />{lbl('Add')}</button>
       </>}
     </li>
   )
@@ -142,14 +145,22 @@ function Landing({ host, onConnected }: { host: string | null; onConnected: (h: 
   )
 }
 
-function Songs({ q, act, filter, epoch }: { q: string; act: Act; filter: Filter; epoch: number }) {
-  const p = usePaged(page => searchSongs(q, filter, page), [q, fkey(filter), epoch])
+function Songs({ q, act, filter, epoch, favs }: { q: string; act: Act; filter: Filter; epoch: number; favs: Favs }) {
+  const p = usePaged(page => searchSongs(q, filter, page), [q, fkey(filter), epoch], s => s.sONGBM)
   return (
     <>
-      <ul className="grid gap-2 xl:grid-cols-2">{p.items.map((s, i) => <SongRow key={`${s.sONGBM}-${i}`} s={s} act={act} />)}</ul>
+      <ul className="grid gap-2 xl:grid-cols-2">{p.items.map((s, i) => <SongRow key={`${s.sONGBM}-${i}`} s={s} act={act} favs={favs} />)}</ul>
       <Status state={p.state} empty={!p.items.length} hasMore={p.hasMore} more={p.more} retry={p.retry} />
     </>
   )
+}
+
+function SavedList({ items, q, act, favs, empty, note }: { items: Song[]; q: string; act: Act; favs: Favs; empty: string; note?: string }) {
+  const n = q.trim().toLowerCase()
+  if (!items.length) return <p className="p-6 text-center text-zinc-500">{empty}</p>
+  items = n ? items.filter(s => (s.sONGNAME + ' ' + s.sINGER).toLowerCase().includes(n)) : items
+  if (!items.length) return <p className="p-6 text-center text-zinc-500">Nothing found.</p>
+  return <>{note && <p className="mb-2 px-1 text-xs text-zinc-500">{note}</p>}<ul className="grid gap-2 xl:grid-cols-2">{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul></>
 }
 
 function SingerCard({ s, onPick }: { s: Singer; onPick: () => void }) {
@@ -168,7 +179,7 @@ function SingerCard({ s, onPick }: { s: Singer; onPick: () => void }) {
 }
 
 function Singers({ q, area, onPick, epoch }: { q: string; area: number; onPick: (name: string) => void; epoch: number }) {
-  const p = usePaged(page => searchSingers(q, area, page), [q, area, epoch])
+  const p = usePaged(page => searchSingers(q, area, page), [q, area, epoch], s => s.name)
   return (
     <>
       <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6">
@@ -256,7 +267,7 @@ function SettingsPanel({ t }: { t: ReturnType<typeof useTheme> }) {
   )
 }
 
-const TABS = [['songs', 'Songs'], ['singers', 'Singers'], ['queue', 'Queue']] as const
+const TABS = [['songs', 'Songs'], ['singers', 'Singers'], ['favorites', 'Favorites'], ['history', 'History'], ['queue', 'Queue']] as const
 type Tab = (typeof TABS)[number][0]
 
 export default function Root() {
@@ -281,6 +292,7 @@ function App() {
   const [toast, setToast] = useState<{ text: string; icon?: IconName; tone?: 'accent' | 'cloud' | 'error'; on: boolean }>({ text: '', on: false })
   const toastTimer = useRef<number>(0)
 
+  const filterable = tab === 'songs' || tab === 'singers' // saved lists only get text search
   const activeLabel = tab === 'songs' ? (filter.singer ? filter.singer : filterName(filter)) : area > 0 ? AREAS[area] : undefined
   useEffect(() => { document.body.style.overflow = menu ? 'hidden' : '' }, [menu])
 
@@ -295,17 +307,40 @@ function App() {
     setQueue(q); setOnline(true); setFails(0)
     if (wasDown.current) { wasDown.current = false; setEpoch(e => e + 1) }
   }).catch(() => { wasDown.current = true; setOnline(false); setFails(f => f + 1) }), [])
+  const [favList, setFavList] = useState<Song[]>([])
+  const [history, setHistory] = useState<Song[]>([])
+  // Other devices share these lists, so reload whenever the tab changes.
+  useEffect(() => {
+    getList('favorites').then(l => Array.isArray(l) && setFavList(l)).catch(() => {})
+    getList('history').then(l => Array.isArray(l) && setHistory(l)).catch(() => {})
+  }, [tab])
+  const flash = (text: string, tone?: 'error') => {
+    setToast({ text, tone, on: true }); clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), 2500)
+  }
+  const favs: Favs = {
+    has: s => favList.some(f => f.sONGBM === s.sONGBM),
+    toggle: s => {
+      const prev = favList, on = favs.has(s)
+      setFavList(on ? prev.filter(f => f.sONGBM !== s.sONGBM) : [...prev, s])
+      ;(on ? removeFavorite(s.sONGBM!) : addFavorite(s)).catch(() => { setFavList(prev); flash("Couldn't save favorite", 'error') })
+    },
+  }
+  const record = (s: Song) => { // newest first, one entry per song; the server does the same and caps at 100
+    setHistory(h => [s, ...h.filter(x => x.sONGBM !== s.sONGBM)].slice(0, 100))
+    recordHistory(s).catch(() => {})
+  }
   const total = queue.items.length
   useEffect(() => { refresh(); const t = setInterval(refresh, 3000); return () => clearInterval(t) }, [refresh])
 
-  const act: Act = (cmd, val = '', label, icon) => {
+  const act: Act = (cmd, val = '', label, icon, song) => {
     const show = (text: string, i?: IconName, tone?: 'error') => {
       // Pill mirrors the pressed button: Add is accent-filled, everything else neutral.
       setToast({ text, icon: i, tone: tone ?? (i === 'cloud' ? 'cloud' : cmd === 'Add1' ? 'accent' : undefined), on: true })
       clearTimeout(toastTimer.current)
       toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), longPopups ? 4500 : 2500)
     }
-    command(cmd, val).then(() => { show(label ?? cmd, icon); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
+    command(cmd, val).then(() => { show(label ?? cmd, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
   }
 
   const item = (on: boolean, extra = '') => `flex flex-1 flex-col items-center gap-0.5 rounded-xl px-4 py-1.5 text-xs transition duration-150 active:scale-95 md:flex-none md:flex-row md:gap-2 md:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
@@ -335,15 +370,15 @@ function App() {
       <header className={`sticky top-0 z-10 flex items-center gap-3 p-3 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
         <h1 className="hidden text-lg font-bold text-accent sm:block">KTV</h1>
         {tabs('hidden md:flex md:gap-2')}
-        {(tab === 'songs' || tab === 'singers') &&
+        {tab !== 'queue' &&
           <div className="min-w-0 flex-1" data-popup>
             <div className="relative">
-            <input value={q} onChange={e => setQ(e.target.value)} type="search" placeholder={tab === 'songs' ? 'Search songs…' : 'Search singers…'}
-              className="w-full rounded-xl bg-zinc-200 py-3 pl-4 pr-40 outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800" />
-            <button aria-label="Filters" onClick={() => setMenu(menu === 'filter' ? null : 'filter')}
+            <input value={q} onChange={e => setQ(e.target.value)} type="search" placeholder={`Search ${tab}…`}
+              className={`w-full rounded-xl bg-zinc-200 py-3 pl-4 ${filterable ? 'pr-40' : 'pr-4'} outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800`} />
+            {filterable && <button aria-label="Filters" onClick={() => setMenu(menu === 'filter' ? null : 'filter')}
               className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium transition duration-150 hover:brightness-110 active:scale-95 after:content-['▾'] ${activeLabel ? 'bg-accent text-white' : 'bg-zinc-300 dark:bg-zinc-700'}`}>
                 <span className="block max-w-28 truncate">{activeLabel ?? 'Filter'}</span>
-              </button>
+              </button>}
             </div>
           </div>}
         <div className="ml-auto flex items-center gap-2">
@@ -359,7 +394,9 @@ function App() {
 
       <div className="flex gap-6 px-3">
         <main className="min-w-0 flex-1">
-          {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} />}
+          {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
+          {tab === 'favorites' && <SavedList items={favList} q={q} act={act} favs={favs} empty="No favorites yet. Tap the heart on a song to save it." />}
+          {tab === 'history' && <SavedList items={history} q={q} act={act} favs={favs} empty="Nothing requested yet." note="Songs requested from this app, newest first. Not necessarily what played." />}
           {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
           {tab === 'queue' && <Queue items={queue.items} act={act} />}
         </main>

@@ -3,3 +3,5 @@ dist
 ktv-config.json
 lxc
 .git
+mock
+ktv.db*

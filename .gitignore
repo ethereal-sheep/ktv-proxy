@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 ktv-config.json
+
+# local databases (favorites/history), incl. the ones dev:mock writes
+ktv.db*
+mock/data/
