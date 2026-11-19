@@ -72,8 +72,45 @@ function callBox(servlet: string, params: Record<string, string>): Promise<Recor
   })
 }
 
+// Readable names for the box's cryptic CommandServlet codes. Queue edits have their own routes (below); these are the remote-control buttons.
+const ACTIONS: Record<string, string> = {
+  'toggle-vocal': 'MuOr',
+  'skip': 'Skip',
+  'replay': 'Reset',
+  'play-pause': 'Play',
+  'mute': 'Mute',
+  'music-volume-up': 'Music_volUp',
+  'music-volume-down': 'Music_volDown',
+  'music-key-up': 'Music_toneUp',
+  'music-key-down': 'Music_toneDown',
+  'mic-volume-up': 'Mic_volUp',
+  'mic-volume-down': 'Mic_volDown',
+  'mic-echo-up': 'Mic_echoUp',
+  'mic-echo-down': 'Mic_echoDown',
+  'mic-reverb-up': 'Mic_reverbUp',
+  'mic-reverb-down': 'Mic_reverbDown',
+}
+
 // List fields arrive as JSON strings inside the JSON.
 const rows = (d: Record<string, string>, k: string) => JSON.parse(d[k] || '[]')
+
+// The box never says what is playing, so we infer it. Assumption: the queue lists only upcoming songs, so a song
+// that leaves the head (not because we deleted it) has started playing. Skip with nothing queued means silence.
+// shortcut: a song ending with an empty queue is invisible (nothing leaves the queue), so current goes stale; upgrade if the box exposes player state.
+type QSong = { xH?: string; sONGBM: string }
+const qkey = (s: QSong) => s.xH ?? s.sONGBM
+let current: QSong | null = null, lastQueue: QSong[] | null = null
+const removed = new Set<string>() // keys we sent Del1 for, until they vanish from the queue
+async function pollQueue() {
+  let q: QSong[]
+  try { q = rows(await callBox('PlaylistServlet', { onSelectPage: 'true' }), 'songList') } catch { return }
+  const keys = new Set(q.map(qkey))
+  const head = lastQueue?.[0]
+  if (head && !keys.has(qkey(head)) && !removed.has(qkey(head))) current = head
+  for (const k of removed) if (!keys.has(k)) removed.delete(k)
+  lastQueue = q
+}
+setInterval(pollQueue, 3000).unref()
 
 const fromBox = (res: ServerResponse, servlet: string, params: Record<string, string>, shape: (d: Record<string, string>) => unknown) =>
   void callBox(servlet, params).then(d => json(res, 200, shape(d))).catch(e => {
@@ -164,12 +201,25 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
   if (path === '/api/singers' && req.method === 'GET') return fromBox(res, 'SingerServlet',
     { singer: g('q'), singerType: g('type'), sortType: '', page: g('page') || '0' }, d => ({ items: rows(d, 'singerList'), maxPage: +d.maxPage }))
   if (path === '/api/queue' && req.method === 'GET') return fromBox(res, 'PlaylistServlet', { onSelectPage: 'true' }, d => ({ items: rows(d, 'songList'), count: +d.number }))
-  if (path === '/api/queue/commands' && req.method === 'POST') return void readBody(req).then(b => {
-    let c: { cmd?: unknown; value?: unknown } = {}
+  // Songs are addressed by id (sONGBM) when adding, and by queue key (xH) once queued.
+  const command = (cmd: string, cmdValue: string) => {
+    if (cmd === 'Del1') removed.add(cmdValue)
+    if (cmd === 'Skip') current = null // the next poll sets it again if a queued song starts
+    fromBox(res, 'CommandServlet', { cmd, cmdValue }, d => d)
+    void pollQueue() // pick up the change now instead of in 3s
+  }
+  if (path === '/api/queue/songs' && req.method === 'POST') return void readBody(req).then(b => {
+    let c: { id?: unknown; next?: unknown } = {}
     try { c = JSON.parse(b) } catch { /* falls through to the 400 */ }
-    if (typeof c.cmd !== 'string' || !c.cmd) return json(res, 400, { error: 'expected cmd' })
-    fromBox(res, 'CommandServlet', { cmd: c.cmd, cmdValue: String(c.value ?? '') }, d => d)
+    if (typeof c.id !== 'string' || !c.id) return json(res, 400, { error: 'expected id' })
+    command(c.next ? 'Pro1' : 'Add1', c.id)
   })
+  const queued = path.match(/^\/api\/queue\/songs\/([^/]+)$/)
+  if (queued && req.method === 'POST') return command('Pro2', decodeURIComponent(queued[1])) // move an already-queued song to play next
+  if (queued && req.method === 'DELETE') return command('Del1', decodeURIComponent(queued[1]))
+  if (path === '/api/player/current' && req.method === 'GET') return json(res, 200, { song: current })
+  const act = path.match(/^\/api\/player\/([^/]+)$/)
+  if (act && req.method === 'POST') return Object.hasOwn(ACTIONS, act[1]) ? command(ACTIONS[act[1]], '') : json(res, 400, { error: 'unknown action' })
   const pic = path.match(/^\/api\/singers\/picture\/([^/]+)$/)
   if (pic && req.method === 'GET') return pictureFromBox(res, pic[1])
   if (url === '/api/scan') return void scan().then(found => json(res, 200, { found }))

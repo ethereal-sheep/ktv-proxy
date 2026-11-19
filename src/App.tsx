@@ -54,7 +54,7 @@ function Status({ state, empty, hasMore, more, retry }: { state: string; empty: 
   return <div ref={el} className="h-8" />
 }
 
-type Act = (cmd: string, val?: string, label?: string, icon?: IconName, song?: Song) => void
+type Act = (action: string, val?: string, label?: string, icon?: IconName, song?: Song) => void
 // tap: favorite it, or (if already a favorite) open its category picker. hold: favorite it if needed, then open the picker.
 type Favs = { has: (s: Song) => boolean; tap: (s: Song) => void; hold: (s: Song) => void }
 
@@ -91,12 +91,12 @@ function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; 
         <div style={fit(s.sINGER, 14, 40, 11)} className="break-words text-zinc-500">{singers.map((n, i) => <span key={i}><span className="inline-block max-w-full">{n}{i < singers.length - 1 && ','}</span>{' '}</span>)}</div>
       </div>
       {queue ? <>
-        <button className={btn + col} title="Play next" onClick={() => act('Pro2', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
-        <button className={btn + col} title="Remove" onClick={() => act('Del1', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
+        <button className={btn + col} title="Play next" onClick={() => act('move-next', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
+        <button className={btn + col} title="Remove" onClick={() => act('remove', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
       </> : <>
         {favs && <button className={btn + col + ' select-none'} title={favs.has(s) ? 'Categories' : 'Add to favorites (hold to pick categories)'} aria-pressed={favs.has(s)} {...hold}><Icon name="favorites" className={favs.has(s) ? 'size-5 fill-current text-accent' : 'size-5'} />{lbl('Fav')}</button>}
-        <button className={btn + col} title="Play next" onClick={() => act('Pro1', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next', s)}><Icon name="next" />{lbl('Next')}</button>
-        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('Add1', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add', s)}><Icon name="add" />{lbl('Add')}</button>
+        <button className={btn + col} title="Play next" onClick={() => act('play-song-next', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next', s)}><Icon name="next" />{lbl('Next')}</button>
+        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('add-song', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add', s)}><Icon name="add" />{lbl('Add')}</button>
       </>}
     </li>
   )
@@ -233,10 +233,10 @@ function Remote({ act }: { act: Act }) {
   )
   return (
     <div>
-      <Group title="Vocal track">{[b('Original / Karaoke', 'MuOr', 'karaoke', true)]}</Group>
-      <Group title="Playback">{[b('Skip', 'Skip', 'skip'), b('Replay', 'Reset', 'replay'), b('Play / Pause', 'Play', 'play'), b('Mute', 'Mute', 'mute')]}</Group>
-      <Group title="Music">{[b('Vol +', 'Music_volUp'), b('Vol −', 'Music_volDown'), b('Key ♯', 'Music_toneUp'), b('Key ♭', 'Music_toneDown')]}</Group>
-      {showMic && <Group title="Mic">{[b('Vol +', 'Mic_volUp'), b('Vol −', 'Mic_volDown'), b('Echo +', 'Mic_echoUp'), b('Echo −', 'Mic_echoDown'), b('Reverb +', 'Mic_reverbUp'), b('Reverb −', 'Mic_reverbDown')]}</Group>}
+      <Group title="Vocal track">{[b('Original / Karaoke', 'toggle-vocal', 'karaoke', true)]}</Group>
+      <Group title="Playback">{[b('Skip', 'skip', 'skip'), b('Replay', 'replay', 'replay'), b('Play / Pause', 'play-pause', 'play'), b('Mute', 'mute', 'mute')]}</Group>
+      <Group title="Music">{[b('Vol +', 'music-volume-up'), b('Vol −', 'music-volume-down'), b('Key ♯', 'music-key-up'), b('Key ♭', 'music-key-down')]}</Group>
+      {showMic && <Group title="Mic">{[b('Vol +', 'mic-volume-up'), b('Vol −', 'mic-volume-down'), b('Echo +', 'mic-echo-up'), b('Echo −', 'mic-echo-down'), b('Reverb +', 'mic-reverb-up'), b('Reverb −', 'mic-reverb-down')]}</Group>}
     </div>
   )
 }
@@ -535,14 +535,14 @@ function App() {
   const total = queue.items.length
   useEffect(() => { refresh(); const t = setInterval(refresh, 3000); return () => clearInterval(t) }, [refresh])
 
-  const act: Act = (cmd, val = '', label, icon, song) => {
+  const act: Act = (action, val = '', label, icon, song) => {
     const show = (text: string, i?: IconName, tone?: 'error') => {
       // Pill mirrors the pressed button: Add is accent-filled, everything else neutral.
-      setToast({ text, icon: i, tone: tone ?? (i === 'cloud' ? 'cloud' : cmd === 'Add1' ? 'accent' : undefined), on: true })
+      setToast({ text, icon: i, tone: tone ?? (i === 'cloud' ? 'cloud' : action === 'add-song' ? 'accent' : undefined), on: true })
       clearTimeout(toastTimer.current)
       toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), longPopups ? 4500 : 2500)
     }
-    command(cmd, val).then(() => { show(label ?? cmd, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
+    command(action, val).then(() => { show(label ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
   }
 
   const item = (on: boolean, extra = '') => `flex flex-1 flex-col items-center gap-0.5 rounded-xl px-4 py-1.5 text-xs transition duration-150 active:scale-95 md:flex-none md:flex-row md:gap-2 md:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`

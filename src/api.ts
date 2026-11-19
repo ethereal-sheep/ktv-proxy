@@ -14,7 +14,17 @@ async function get<T>(url: string, params: Record<string, string | number> = {})
 export const searchSongs = (q: string, f: Filter, page: number) => get<{ items: Song[]; maxPage: number }>('/api/songs', { q, ...f, page })
 export const searchSingers = (q: string, type: number, page: number) => get<{ items: Singer[]; maxPage: number }>('/api/singers', { q, type, page })
 export const getQueue = () => get<{ items: Song[]; count: number }>('/api/queue')
-export const command = (cmd: string, value = '') => send('/api/queue/commands', 'POST', { cmd, value })
+// One entry point for every box action; queue edits go to /api/queue/songs, the rest are remote-control buttons under /api/player.
+export const command = (action: string, value = '') => {
+  const song = `/api/queue/songs/${encodeURIComponent(value)}`
+  switch (action) {
+    case 'add-song': return send('/api/queue/songs', 'POST', { id: value })
+    case 'play-song-next': return send('/api/queue/songs', 'POST', { id: value, next: true })
+    case 'move-next': return send(song, 'POST')
+    case 'remove': return send(song, 'DELETE')
+    default: return send(`/api/player/${action}`, 'POST')
+  }
+}
 export const singerImg = (p: string) => `/api/singers/picture/${encodeURIComponent(p)}`
 
 // Box address lives on the server (see server/ktv.ts), not in the browser, because the server is what talks to it.
