@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.5",
+    "embla-carousel-react": "^8.6.0",
     "lucide-react": "^1.72.0",
     "pinyin-pro": "^3.29.5",
     "react": "^19.3.1",

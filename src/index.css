@@ -14,3 +14,9 @@ button { -webkit-user-select: none; user-select: none; } /* button labels should
 @keyframes heart-burst { 0% { opacity: 0; transform: scale(.4); } 30% { opacity: .9; transform: scale(1.1); } 100% { opacity: 0; transform: scale(1.5); } }
 .animate-heart-burst { animation: heart-burst .6s ease-out forwards; }
 @media (prefers-reduced-motion: reduce) { .animate-heart-pop, .animate-heart-burst { animation: none; } }
+
+@media (prefers-reduced-motion: reduce) { .animate-spin { animation: none; } }
+@keyframes marquee { to { transform: translateX(-50%); } }
+.animate-marquee { animation: marquee var(--d, 20s) linear infinite; }
+@media (prefers-reduced-motion: reduce) { .animate-marquee { animation: none; } }
+[data-queue-open] main .heart-badge { visibility: hidden; } /* the badges overhang their rows and would peek out beside the queue popup */

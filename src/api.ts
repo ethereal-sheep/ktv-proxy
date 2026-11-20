@@ -62,3 +62,5 @@ export const renameCategory = (id: number, name: string) => send(`/api/categorie
 export const reorderCategories = (ids: number[]) => send('/api/categories/order', 'PUT', { ids })
 export const deleteCategory = (id: number, songs: DeleteSongs) => send(`/api/categories/${id}?songs=${songs}`, 'DELETE')
 export const setSongCategory = (bm: string, id: number, on: boolean) => send(`/api/favorites/${encodeURIComponent(bm)}/categories/${id}`, on ? 'PUT' : 'DELETE')
+
+export const clearList = (name: ListName) => send(`/api/${name}`, 'DELETE')

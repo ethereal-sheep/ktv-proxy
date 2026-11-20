@@ -46,6 +46,8 @@ export function listFavorites() {
 export const addFavorite = (s: Song) =>
   get().prepare('INSERT INTO favorites VALUES (?, ?, ?) ON CONFLICT(sONGBM) DO NOTHING').run(s.sONGBM, s.sONGNAME, s.sINGER)
 
+export const clearFavorites = () => get().prepare('DELETE FROM favorites').run() // cascades to category links; categories stay
+export const clearHistory = () => get().prepare('DELETE FROM history').run()
 export const removeFavorite = (bm: string) => get().prepare('DELETE FROM favorites WHERE sONGBM = ?').run(bm)
 
 // seq is a counter, not a clock, so entries recorded in the same millisecond still sort correctly.

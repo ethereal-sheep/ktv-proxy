@@ -1,5 +1,6 @@
+import useEmblaCarousel from 'embla-carousel-react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
+import { clearList, addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
 
@@ -110,7 +111,7 @@ function SongRow({ s, act, queue, favs, downloading, first }: { s: Song; act: Ac
   return (
     <li {...(queue || !favs ? {} : g.handlers)} tabIndex={queue || !favs ? undefined : 0} onKeyDown={e => e.key === 'Enter' && e.target === e.currentTarget && favs?.open(s)}
       className={`relative flex touch-manipulation select-none items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-[box-shadow,background-color] hover:shadow-md dark:bg-zinc-900 ${g.holding ? 'bg-accent/5 ring-2 ring-accent/40 duration-300' : 'duration-150'} ${downloading ? 'opacity-60' : ''}`}>
-      {(liked || cloud) && <span className="absolute -left-1 -top-2 z-[1] flex items-center gap-1 drop-shadow">
+      {(liked || cloud) && <span className="heart-badge absolute -left-1 -top-2 z-[1] flex items-center gap-1 drop-shadow">
         {liked && <Icon name="favorites" className={`size-5 fill-current text-pink-500 ${pop ? 'animate-heart-pop' : ''}`} />}
         {cloud && <span title="Cloud song: downloads when requested" className="flex items-center gap-1 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-500"><Icon name="cloud" className="size-5 fill-current" />{helperLabels && <span>Cloud</span>}</span>}
       </span>}
@@ -207,7 +208,7 @@ function Songs({ q, act, filter, epoch, favs }: { q: string; act: Act; filter: F
   )
 }
 
-function SavedList({ name, items, q, act, favs, empty }: { name: ListName; items: Song[]; q: string; act: Act; favs: Favs; empty: string }) {
+function SavedList({ name, items, q, act, favs, empty, narrow }: { name: ListName; items: Song[]; q: string; act: Act; favs: Favs; empty: string; narrow?: boolean }) {
   const n = q.trim().toLowerCase()
   // the server matches (incl. pinyin); until it answers, or if it can't, fall back to plain text
   const [hits, setHits] = useState<{ ids: Set<string> } | null>(null) // kept while typing, so the list doesn't blank between keystrokes
@@ -219,7 +220,7 @@ function SavedList({ name, items, q, act, favs, empty }: { name: ListName; items
   if (!items.length) return <p className="p-6 text-center text-zinc-500">{empty}</p>
   if (n && hits) items = items.filter(s => hits.ids.has(s.sONGBM!)) // no answer yet: keep showing the unfiltered list rather than a blank
   if (!items.length) return <p className="p-6 text-center text-zinc-500">Nothing found.</p>
-  return <ul className="grid gap-2 xl:grid-cols-2">{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul>
+  return <ul className={`grid gap-2 ${narrow ? '' : 'xl:grid-cols-2'}`}>{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul>
 }
 
 function SingerCard({ s, onPick }: { s: Singer; onPick: () => void }) {
@@ -262,7 +263,7 @@ function SolidMic({ off }: { off?: boolean }) {
   )
 }
 
-// The first four Remote panel actions.
+// Labels for the toast shown after each remote action.
 const REMOTE_LABELS: Record<string, string> = {
   'toggle-vocal': 'Switched Original / Karaoke', replay: 'Replaying', 'play-pause': 'Play / Pause sent', skip: 'Skipped', mute: 'Mute toggled',
   'music-volume-up': 'Music volume up', 'music-volume-down': 'Music volume down', 'music-key-up': 'Key up', 'music-key-down': 'Key down',
@@ -270,57 +271,119 @@ const REMOTE_LABELS: Record<string, string> = {
   'mic-reverb-up': 'Reverb up', 'mic-reverb-down': 'Reverb down',
 }
 const PLAYER_CONTROLS: [string, string, IconName, boolean?][] = [['Original / Karaoke', 'toggle-vocal', 'karaoke'], ['Replay', 'replay', 'restart', true], ['Play / Pause', 'play-pause', 'play', true], ['Skip', 'skip', 'skip', true]]
-function Queue({ items, pending, current, act }: { items: Song[]; pending: Song[]; current: Song | null; act: Act }) {
-  const { playerControls } = useContext(SettingsCtx)
+const ctl = 'flex min-h-11 min-w-11 flex-1 items-center justify-center rounded-xl bg-white/80 px-2 text-sm text-accent shadow-sm transition duration-150 hover:bg-white hover:shadow-md active:scale-90 active:bg-accent active:text-white dark:bg-zinc-900/70 dark:hover:bg-zinc-900 disabled:pointer-events-none disabled:bg-zinc-300/40 disabled:text-zinc-400 disabled:shadow-none dark:disabled:bg-zinc-700/30 dark:disabled:text-zinc-600'
+
+// The vinyl: spins while a song plays.
+function Disc({ spin, className }: { spin: boolean; className: string }) {
   return (
-    <>
-      <div className={`mb-2 rounded-xl px-4 py-3 transition-colors ${current ? 'bg-accent/15' : 'bg-zinc-200/60 dark:bg-zinc-800/60'}`}>
-        <div className="flex items-center gap-3">
+    <div aria-hidden className={`relative shrink-0 rounded-full ${spin ? 'animate-spin bg-zinc-900 dark:bg-zinc-950' : 'bg-zinc-400 dark:bg-zinc-700'} ${className}`} style={spin ? { animationDuration: '3s' } : undefined}>
+      <div className="absolute inset-[10%] rounded-full border border-white/10" />
+      <div className="absolute inset-[21%] rounded-full border border-white/10" />
+      <div className={`absolute inset-[32%] rounded-full ${spin ? 'bg-accent' : 'bg-zinc-300 dark:bg-zinc-500'}`} />
+      <div className="absolute left-1/2 top-1/2 size-[10%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" />
+      <div className="absolute left-[10%] top-1/2 h-0.5 w-[14%] -translate-y-1/2 rounded bg-white/30" />
+    </div>
+  )
+}
+
+function NowPlaying({ current, act }: { current: Song | null; act: Act }) {
+  const { playerControls, showMusic, showMic } = useContext(SettingsCtx)
+  const pair = (label: string, down: string, up: string) => (
+    <div key={label} className="flex min-w-32 flex-1 items-center gap-1 rounded-xl bg-white/80 shadow-sm dark:bg-zinc-900/70">
+      <button aria-label={`${label} down`} className="min-h-11 min-w-11 flex-1 rounded-l-xl text-accent transition active:scale-90 active:bg-accent active:text-white" onClick={() => act(down)}>−</button>
+      <span className="text-xs text-zinc-500">{label}</span>
+      <button aria-label={`${label} up`} className="min-h-11 min-w-11 flex-1 rounded-r-xl text-accent transition active:scale-90 active:bg-accent active:text-white" onClick={() => act(up)}>+</button>
+    </div>
+  )
+  return (
+    <div className={`mb-2 rounded-xl px-4 py-3 transition-colors ${current ? 'bg-accent/15' : 'bg-zinc-200/60 dark:bg-zinc-800/60'}`}>
+      <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className={`text-[10px] font-semibold uppercase tracking-wide text-accent`}>Now playing</div>
           {current
             ? <><div className="break-words font-medium leading-snug">{current.sONGNAME}</div><div className="break-words text-zinc-500">{current.sINGER}</div></>
             : <><div className="font-medium leading-snug text-zinc-400">Nothing playing right now</div><div className="text-zinc-400">-</div></>}
         </div>
-        <div aria-hidden className={`relative size-14 shrink-0 rounded-full ${current ? 'animate-spin bg-zinc-900 dark:bg-zinc-950' : 'bg-zinc-400 dark:bg-zinc-700'}`} style={current ? { animationDuration: '3s' } : undefined}>
-          <div className="absolute inset-1.5 rounded-full border border-white/10" />
-          <div className="absolute inset-3 rounded-full border border-white/10" />
-          <div className={`absolute inset-[18px] rounded-full ${current ? 'bg-accent' : 'bg-zinc-300 dark:bg-zinc-500'}`} />
-          <div className="absolute left-1/2 top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" />
-          <div className="absolute left-1.5 top-1/2 h-0.5 w-2 -translate-y-1/2 rounded bg-white/30" />
-        </div>
-        </div>
-        {playerControls && <div className="mt-3 flex flex-wrap gap-2">
-          {PLAYER_CONTROLS.map(([label, c, icon, solid]) => (
-            <button key={c} disabled={!current} className={`flex flex-1 items-center justify-center rounded-xl bg-white/80 px-3 py-2 text-accent shadow-sm transition duration-150 hover:bg-white hover:shadow-md active:scale-90 active:bg-accent active:text-white dark:bg-zinc-900/70 dark:hover:bg-zinc-900 disabled:pointer-events-none disabled:bg-zinc-300/40 disabled:text-zinc-400 disabled:shadow-none dark:disabled:bg-zinc-700/30 dark:disabled:text-zinc-600`} title={label} aria-label={label} onClick={() => act(c)}>{c === 'toggle-vocal' ? <><SolidMic /><span className="mx-2 h-4 w-px bg-current opacity-30" /><SolidMic off /></> : <Icon name={icon} className={`size-4 ${solid ? 'fill-current' : ''}`} />}</button>
-          ))}
-        </div>}
+        <Disc spin={!!current} className="size-14" />
       </div>
-      <ul className="grid gap-2">
-        {items.map((s, i) => <SongRow key={s.xH} s={s} act={act} queue first={i === 0} />)}
-        {pending.map((s, i) => <SongRow key={'dl' + i} s={s} act={act} queue downloading />)}
-      </ul>
-    </>
+      {playerControls && <div className="mt-3 flex gap-2">
+        {PLAYER_CONTROLS.map(([label, c, icon, solid]) => (
+          <button key={c} disabled={!current} className={ctl} title={label} aria-label={label} onClick={() => act(c)}>{c === 'toggle-vocal' ? <><SolidMic /><span className="mx-2 h-4 w-px bg-current opacity-30" /><SolidMic off /></> : <Icon name={icon} className={`size-4 ${solid ? 'fill-current' : ''}`} />}</button>
+        ))}
+      </div>}
+      {showMusic && <div className="mt-2 flex gap-2">
+        <button className={ctl} onClick={() => act('music-volume-down')}>Vol −</button>
+        <button className={ctl} onClick={() => act('music-volume-up')}>Vol +</button>
+        <button className={ctl} aria-label="Mute" title="Mute" onClick={() => act('mute')}><Icon name="mute" className="size-4" /></button>
+        <button className={ctl} aria-label="Key down" onClick={() => act('music-key-down')}>♭</button>
+        <button className={ctl} aria-label="Key up" onClick={() => act('music-key-up')}>♯</button>
+      </div>}
+      {showMic && <div className="mt-2 flex flex-wrap gap-2">
+        {pair('Mic', 'mic-volume-down', 'mic-volume-up')}{pair('Echo', 'mic-echo-down', 'mic-echo-up')}{pair('Reverb', 'mic-reverb-down', 'mic-reverb-up')}
+      </div>}
+    </div>
   )
 }
 
-const Group = ({ title, children }: { title: string; children: ReactNode }) => (
-  <section className="mb-6"><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">{title}</h3>
-    <div className="grid grid-cols-2 gap-2">{children}</div></section>
-)
-
-function Remote({ act }: { act: Act }) {
-  const { showMic } = useContext(SettingsCtx)
-  const b = (label: string, c: string, icon?: Parameters<typeof Icon>[0]['name'], wide = false) => (
-    <button key={c} className={`${btn} flex items-center justify-center gap-2 ${wide ? 'col-span-2' : ''}`} onClick={() => act(c)}>{icon && <Icon name={icon} className="size-4" />}{label}</button>
-  )
+type QView = 'queue' | 'history'
+const QVIEWS: QView[] = ['queue', 'history']
+// The now-playing card stays pinned; Queue and History are two swipeable panes that scroll on their own.
+// The queue column on desktop and the popup on smaller screens are both this.
+function QueuePanel({ view, setView, queue, history, act, favs }: { view: QView; setView: (v: QView) => void; queue: { items: Song[]; pending: Song[]; current: Song | null }; history: Song[]; act: Act; favs: Favs }) {
+  // Embla does the swiping: it locks the axis on the first moves, so a vertical scroll in a list never fights the horizontal drag.
+  const [viewport, embla] = useEmblaCarousel({ startIndex: QVIEWS.indexOf(view), duration: 22 })
+  const root = useRef<HTMLDivElement>(null)
+  // Painted straight on the DOM from Embla's per-frame scroll event (--p = 0..1 swipe progress; data-on marks the nearest pane); React state only changes once the swipe has settled.
+  useEffect(() => {
+    if (!embla) return
+    const paint = () => {
+      const p = embla.scrollProgress() * (QVIEWS.length - 1), el = root.current
+      if (!el) return
+      el.style.setProperty('--p', String(p))
+      el.querySelectorAll<HTMLElement>('[data-i]').forEach(n => { n.dataset.on = String(Math.abs(p - +n.dataset.i!) < 0.5) })
+    }
+    const settled = () => setView(QVIEWS[embla.selectedScrollSnap()])
+    paint(); embla.on('scroll', paint).on('reInit', paint).on('settle', settled)
+    return () => { embla.off('scroll', paint).off('reInit', paint).off('settle', settled) }
+  }, [embla, setView])
+  const pane = `h-full min-w-0 flex-[0_0_100%] overflow-y-auto overscroll-y-contain px-1 pt-2.5` // the padding leaves room for the heart badge that overhangs each row
+  const tab = (v: QView, i: number, cls: string) => <button key={v} data-i={i} role="tab" aria-selected={view === v} onClick={() => embla?.scrollTo(i)} className={`capitalize ${cls}`}>{v}</button>
+  const thumb = 'absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-accent [transform:translateX(calc(var(--p)*100%))]'
+  const seg = (cls: string) => <div role="tablist" className={`relative flex ${cls}`}><span className={thumb} />{QVIEWS.map((v, i) => tab(v, i, 'relative z-10 flex-1 text-xs font-semibold text-zinc-600 transition-colors data-[on=true]:text-white dark:text-zinc-300'))}</div>
   return (
-    <div>
-      <Group title="Vocal track">{[b('Original / Karaoke', 'toggle-vocal', 'karaoke', true)]}</Group>
-      <Group title="Playback">{[b('Skip', 'skip', 'skip'), b('Replay', 'replay', 'replay'), b('Play / Pause', 'play-pause', 'play'), b('Mute', 'mute', 'mute')]}</Group>
-      <Group title="Music">{[b('Vol +', 'music-volume-up'), b('Vol −', 'music-volume-down'), b('Key ♯', 'music-key-up'), b('Key ♭', 'music-key-down')]}</Group>
-      {showMic && <Group title="Mic">{[b('Vol +', 'mic-volume-up'), b('Vol −', 'mic-volume-down'), b('Echo +', 'mic-echo-up'), b('Echo −', 'mic-echo-down'), b('Reverb +', 'mic-reverb-up'), b('Reverb −', 'mic-reverb-down')]}</Group>}
+    <div ref={root} className="flex h-full min-h-0 flex-col">
+      <NowPlaying current={queue.current} act={act} />
+      {seg('h-8 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800')}
+      <div className="min-h-0 flex-1">
+        <div ref={viewport} className="h-full overflow-hidden">
+          <div className="flex h-full touch-pan-y touch-pinch-zoom">
+            <div className={pane}>
+              <ul className="grid gap-2">
+                {queue.items.map((s, i) => <SongRow key={s.xH} s={s} act={act} queue first={i === 0} />)}
+                {queue.pending.map((s, i) => <SongRow key={'dl' + i} s={s} act={act} queue downloading />)}
+              </ul>
+            </div>
+            <div className={pane}><SavedList name="history" items={history} q="" act={act} favs={favs} empty="" narrow /></div>
+          </div>
+        </div>
+      </div>
     </div>
+  )
+}
+
+// Phones: a full-width headline ticker, Now playing then Up next, scrolling right to left. Tap opens the queue. Motion-reduced: a still line.
+function NowBanner({ current, next, onOpen }: { current: Song | null; next?: Song; onOpen: () => void }) {
+  const line = (label: string, s: Song) => <><b className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent">{label}</b>{s.sONGNAME} <span className="text-zinc-500">{s.sINGER}</span></>
+  const parts = [current && line('Now playing', current), next && line('Up next', next)].filter(Boolean)
+  if (!parts.length) return null
+  const chars = (current ? current.sONGNAME.length + current.sINGER.length : 0) + (next ? next.sONGNAME.length + next.sINGER.length : 0)
+  const text = <span className="inline-flex min-w-[100vw] shrink-0 items-center gap-10 pr-10">{parts.map((p, i) => <span key={i}>{p}</span>)}</span>
+  return (
+    <button data-popup onClick={onOpen} aria-label="Now playing and up next. Open queue" className="block h-10 w-full overflow-hidden bg-[color-mix(in_srgb,var(--accent)_18%,#fafafa)] text-sm dark:bg-[color-mix(in_srgb,var(--accent)_22%,#09090b)]">
+      <div className="flex h-full w-max animate-marquee items-center whitespace-nowrap" style={{ ['--d' as string]: `${Math.max(390, chars * 9 + 160) / 80}s` }}>
+        {text}<span aria-hidden>{text}</span>
+      </div>
+    </button>
   )
 }
 
@@ -335,42 +398,106 @@ function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: (
   )
 }
 
-function SettingsMenu({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => void }) {
+function SettingsMenu({ open, onClick }: { open: boolean; onClick: () => void }) {
+  return <button className={`${btn} ${open ? '!bg-accent text-white' : ''}`} aria-label="Settings" aria-pressed={open} onClick={onClick}><Icon name="settings" /></button>
+}
+
+const H = 'text-xs font-semibold uppercase tracking-wide text-zinc-500'
+const section = 'space-y-2 rounded-2xl bg-white p-4 ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10'
+
+function Fact({ label, value }: { label: string; value: ReactNode }) {
+  return <div className="flex flex-wrap justify-between gap-x-4 text-sm"><dt className="text-zinc-500">{label}</dt><dd className="min-w-0 break-all text-right tabular-nums">{value}</dd></div>
+}
+
+function ClearRow({ label, count, onClear }: { label: string; count: number; onClear: () => Promise<unknown> }) {
+  const [ask, setAsk] = useState(false)
+  const [err, setErr] = useState('')
   return (
-    <div data-popup>
-      <button className={btn} aria-label="Settings" onClick={() => setOpen(!open)}><Icon name="settings" /></button>
-    </div>
+    <>
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span>{label} <span className="tabular-nums text-zinc-500">· {count}</span></span>
+        <button disabled={!count} onClick={() => setAsk(true)} className="min-h-11 rounded-lg bg-red-500/10 px-3 text-red-600 transition active:scale-95 disabled:opacity-40 dark:text-red-400">Clear</button>
+      </div>
+      {ask && (
+        <Modal title={`Clear ${label.toLowerCase()}?`} subtitle={`${nSongs(count)} will be removed for everyone using this server. This can't be undone.`} onClose={() => { setAsk(false); setErr('') }}>
+          {err && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+          <div className="flex gap-2">
+            <button onClick={() => { setAsk(false); setErr('') }} className="min-h-11 flex-1 rounded-lg bg-zinc-200 dark:bg-zinc-800">Cancel</button>
+            <button onClick={() => onClear().then(() => setAsk(false)).catch(e => setErr(e.message))} className="min-h-11 flex-1 rounded-lg bg-red-600 font-medium text-white">Clear</button>
+          </div>
+        </Modal>
+      )}
+    </>
   )
 }
 
-// Fixed (not inside the header) so it opens at the same y as the filter popup.
-function SettingsPanel({ t, onManage }: { t: ReturnType<typeof useTheme>; onManage: () => void }) {
+function SettingsPage({ t, online, host, favs, history, cats, onManage, reload }: { t: ReturnType<typeof useTheme>; online: boolean | null; host: string | null | undefined; favs: number; history: number; cats: number; onManage: () => void; reload: () => void }) {
   const st = useContext(SettingsCtx) as ReturnType<typeof useSettingsState>
+  const status = online === true ? ['Connected', 'text-green-600 dark:text-green-400'] : online === false ? ["Can't reach the box", 'text-red-600 dark:text-red-400'] : ['Checking…', 'text-zinc-500']
   return (
-    <div data-popup className="animate-pop pointer-events-auto mt-16 max-h-[calc(100%-4rem)] w-full max-w-xl space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 self-start md:absolute md:right-3 md:top-[4.75rem] md:mt-0 md:w-96 md:max-h-none md:max-w-[calc(100vw-1.5rem)] md:overflow-visible">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Style</h3>
-      <div className="flex gap-1">
-        {(['system', 'light', 'dark'] as Mode[]).map(m => (
-          <button key={m} onClick={() => t.setMode(m)} className={`flex-1 rounded-lg py-1.5 text-sm capitalize transition active:scale-95 ${t.mode === m ? 'bg-accent text-white hover:brightness-110' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{m}</button>
-        ))}
+    <div className="mx-auto max-w-5xl space-y-6 pb-4">
+      <h2 className="text-xl font-bold">Settings</h2>
+      <div className="grid gap-6 md:grid-cols-2 md:items-start">
+        <div className="space-y-3">
+          <div><h3 className="font-semibold">This device</h3><p className="text-sm text-zinc-500">Saved on this phone only.</p></div>
+          <section className={section}>
+            <h4 className={H}>Appearance</h4>
+            <div className="flex gap-1">
+              {(['system', 'light', 'dark'] as Mode[]).map(m => (
+                <button key={m} onClick={() => t.setMode(m)} className={`min-h-11 flex-1 rounded-lg text-sm capitalize transition active:scale-95 ${t.mode === m ? 'bg-accent text-white hover:brightness-110' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{m}</button>
+              ))}
+            </div>
+            <div className="flex justify-between py-1">
+              {Object.entries(ACCENTS).map(([name, hex]) => (
+                <button key={name} aria-label={name} onClick={() => t.setAccent(name as keyof typeof ACCENTS)}
+                  style={{ background: hex }} className={`size-11 rounded-full transition duration-150 hover:scale-105 active:scale-90 ${t.accent === name ? 'ring-2 ring-offset-2 ring-zinc-500 dark:ring-offset-zinc-900' : ''}`} />
+              ))}
+            </div>
+          </section>
+          <section className={section}>
+            <h4 className={H}>Display</h4>
+            <Toggle label="Opaque toolbars" on={st.opaqueBars} onClick={() => st.toggle('opaqueBars')} />
+            <Toggle label="SVG icons" on={st.svgIcons} onClick={() => st.toggle('svgIcons')} />
+            <Toggle label="Helper labels" on={st.helperLabels} onClick={() => st.toggle('helperLabels')} />
+            <Toggle label="Hide secondary names" on={st.hideAltNames} onClick={() => st.toggle('hideAltNames')} />
+            <Toggle label="Longer popups" on={st.longPopups} onClick={() => st.toggle('longPopups')} />
+            <div className="pt-1 lg:hidden">
+              <div className="px-1 pb-1 text-sm">Now-playing banner</div>
+              <div className="flex gap-1">
+                {([['off', 'Off'], ['search', 'Under search'], ['toolbar', 'Above toolbar']] as const).map(([v, l]) => (
+                  <button key={v} onClick={() => st.setBanner(v)} className={`min-h-11 flex-1 rounded-lg px-1 text-sm transition active:scale-95 ${st.banner === v ? 'bg-accent text-white' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{l}</button>
+                ))}
+              </div>
+            </div>
+          </section>
+          <section className={section}>
+            <h4 className={H}>Remote</h4>
+            <Toggle label="Playback controls" on={st.playerControls} onClick={() => st.toggle('playerControls')} />
+            <Toggle label="Music controls (volume, mute, key)" on={st.showMusic} onClick={() => st.toggle('showMusic')} />
+            <Toggle label="Mic controls" on={st.showMic} onClick={() => st.toggle('showMic')} />
+          </section>
+          <section className={section}>
+            <h4 className={H}>Favorites</h4>
+            <button onClick={onManage} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories <span className="tabular-nums text-zinc-500">· {cats}</span></button>
+          </section>
+        </div>
+        <div className="space-y-3">
+          <div><h3 className="font-semibold">This server</h3><p className="text-sm text-zinc-500">Shared by everyone using this remote.</p></div>
+          <section className={section}>
+            <h4 className={H}>Box</h4>
+            <dl className="space-y-1">
+              <Fact label="Address" value={host ?? 'Not set'} />
+              <Fact label="Status" value={<span className={status[1]}>{status[0]}</span>} />
+            </dl>
+            <a href="/api/docs" className="flex min-h-11 items-center text-sm text-accent hover:underline">API docs</a>
+          </section>
+          <section className={section}>
+            <h4 className={H}>Data</h4>
+            <ClearRow label="History" count={history} onClear={() => clearList('history').then(reload)} />
+            <ClearRow label="Favorites" count={favs} onClear={() => clearList('favorites').then(reload)} />
+          </section>
+        </div>
       </div>
-      <div className="flex justify-between">
-        {Object.entries(ACCENTS).map(([name, hex]) => (
-          <button key={name} aria-label={name} onClick={() => t.setAccent(name as keyof typeof ACCENTS)}
-            style={{ background: hex }} className={`size-8 rounded-full transition duration-150 hover:scale-110 active:scale-90 ${t.accent === name ? 'ring-2 ring-offset-2 ring-zinc-500 dark:ring-offset-zinc-900' : ''}`} />
-        ))}
-      </div>
-      <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Display</h3>
-      <Toggle label="Opaque toolbars" on={st.opaqueBars} onClick={() => st.toggle('opaqueBars')} />
-      <Toggle label="SVG icons" on={st.svgIcons} onClick={() => st.toggle('svgIcons')} />
-      <Toggle label="Helper labels" on={st.helperLabels} onClick={() => st.toggle('helperLabels')} />
-      <Toggle label="Hide secondary names" on={st.hideAltNames} onClick={() => st.toggle('hideAltNames')} />
-      <Toggle label="Longer popups" on={st.longPopups} onClick={() => st.toggle('longPopups')} />
-      <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Remote</h3>
-      <Toggle label="Show mic controls" on={st.showMic} onClick={() => st.toggle('showMic')} />
-      <Toggle label="Player controls on Now playing" on={st.playerControls} onClick={() => st.toggle('playerControls')} />
-      <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Favorites</h3>
-      <button onClick={onManage} className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories</button>
     </div>
   )
 }
@@ -382,8 +509,8 @@ const swallowNextClick = () => {
   setTimeout(() => window.removeEventListener('click', stop, true), 400) // no click followed (e.g. a scroll), so don't eat a later one
 }
 
-function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode }) {
-  // On phones the on-screen keyboard (or a bottom URL bar) covers part of the layout viewport; fit the visual viewport instead.
+// Fit the visual viewport, not the layout one: a collapsing mobile URL bar or the on-screen keyboard resizes only the latter, which makes fixed panels jump while scrolling.
+function useVisualViewport() {
   const [vv, setVv] = useState<{ top: number; height: number } | null>(null)
   useEffect(() => {
     const v = window.visualViewport
@@ -392,8 +519,20 @@ function Modal({ title, subtitle, onClose, children }: { title: string; subtitle
     f(); v.addEventListener('resize', f); v.addEventListener('scroll', f)
     return () => { v.removeEventListener('resize', f); v.removeEventListener('scroll', f) }
   }, [])
+  return vv
+}
+
+const LG = '(min-width: 1024px)' // wide enough for the queue column; below it the queue is a popup
+function useLg() {
+  const [m, setM] = useState(() => window.matchMedia(LG).matches)
+  useEffect(() => { const q = window.matchMedia(LG), f = () => setM(q.matches); q.addEventListener('change', f); return () => q.removeEventListener('change', f) }, [])
+  return m
+}
+
+function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode }) {
+  const vv = useVisualViewport()
   return (
-    <div style={vv ? { top: vv.top, height: vv.height, bottom: 'auto' } : undefined} className={`fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-3`} onPointerDown={e => { if (e.target === e.currentTarget) { swallowNextClick(); onClose() } }}>
+    <div style={vv ? { top: vv.top, height: vv.height, bottom: 'auto' } : undefined} data-popup className={`fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-3`} onPointerDown={e => { if (e.target === e.currentTarget) { swallowNextClick(); onClose() } }}>
       <div role="dialog" aria-label={title} className="animate-pop max-h-full w-full max-w-sm space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
@@ -548,7 +687,7 @@ function ManageCategories({ cats, setCats, favs, reload, onClose }: { cats: Cate
   )
 }
 
-const TABS = [['songs', 'Songs'], ['singers', 'Singers'], ['favorites', 'Favorites'], ['history', 'History'], ['queue', 'Queue']] as const
+const TABS = [['songs', 'Songs'], ['singers', 'Singers'], ['favorites', 'Favorites']] as const
 type Tab = (typeof TABS)[number][0]
 
 export default function Root() {
@@ -558,12 +697,15 @@ export default function Root() {
 
 function App() {
   const theme = useTheme() // must live here: it applies dark mode/accent to the page, so it has to stay mounted
-  const { opaqueBars, longPopups } = useContext(SettingsCtx)
+  const { opaqueBars, longPopups, banner } = useContext(SettingsCtx)
   const [tab, setTab] = useState<Tab>('songs')
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>({})
   const [area, setArea] = useState(0)
-  const [menu, setMenu] = useState<'filter' | 'theme' | 'remote' | null>(null)
+  const [menu, setMenu] = useState<'filter' | 'queue' | null>(null)
+  const [qView, setQView] = useState<QView>('queue')
+  const [settings, setSettings] = useState(false)
+  useEffect(() => { if (!settings) return; const h = (e: KeyboardEvent) => e.key === 'Escape' && setSettings(false); window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h) }, [settings])
   useEffect(() => {
     const h = (e: PointerEvent) => {
       const t = e.target as HTMLElement
@@ -579,7 +721,7 @@ function App() {
   const toastTimer = useRef<number>(0)
 
   // Lock page scroll behind a popup on desktop only: on phones a locked body makes the browser bring back its URL bar, so the dim layer (touch-none) blocks scrolling there instead.
-  useEffect(() => { document.body.style.overflow = menu && window.matchMedia('(min-width: 768px)').matches ? 'hidden' : '' }, [menu])
+  useEffect(() => { document.body.style.overflow = menu && menu !== 'queue' && window.matchMedia('(min-width: 768px)').matches ? 'hidden' : '' }, [menu])
 
   // null = first poll pending. Poll results double as the server health check; the last good queue is kept while down.
   const [online, setOnline] = useState<boolean | null>(null)
@@ -589,7 +731,7 @@ function App() {
   const [cfgHost, setCfgHost] = useState<string | null | undefined>(undefined) // undefined = not loaded yet
   useEffect(() => { getHost().then(setCfgHost).catch(() => setCfgHost(undefined)) }, [])
   const refresh = useCallback(() => getQueue().then(q => {
-    setQueue(q); setOnline(true); setFails(0)
+    setQueue(prev => JSON.stringify(prev) === JSON.stringify(q) ? prev : q); setOnline(true); setFails(0) // an unchanged poll must not re-render the lists mid-swipe
     if (wasDown.current) { wasDown.current = false; setEpoch(e => e + 1) }
   }).catch(() => { wasDown.current = true; setOnline(false); setFails(f => f + 1) }), [])
   const [favList, setFavList] = useState<Song[]>([])
@@ -637,8 +779,7 @@ function App() {
       favorite(s); return true
     },
   }
-  const filterable = tab === 'songs' || tab === 'singers' || tab === 'favorites' // history only gets text search
-  const catSel = catFilter === 'none' || cats.some(c => c.id === catFilter) ? catFilter : 'all' // a deleted category falls back to All
+    const catSel = catFilter === 'none' || cats.some(c => c.id === catFilter) ? catFilter : 'all' // a deleted category falls back to All
   const activeLabel = tab === 'songs' ? (filter.singer ? filter.singer : filterName(filter))
     : tab === 'favorites' ? (catSel === 'all' ? undefined : catSel === 'none' ? 'Uncategorized' : cats.find(c => c.id === catSel)?.name)
     : area > 0 ? AREAS[area] : undefined
@@ -661,50 +802,59 @@ function App() {
   }
 
   const cloudIds = useMemo(() => ({ pending: new Set(queue.pending.map(p => String(p.sONGBM))), downloaded: new Set(queue.downloaded) }), [queue.pending, queue.downloaded])
-  const item = (on: boolean, extra = '') => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] transition duration-150 active:scale-95 md:flex-none md:flex-row md:gap-2 md:px-4 md:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
-  const tabs = (cls: string) => (
-    <nav className={cls}>
-      {TABS.map(([k, label]) => (
-        <button key={k} onClick={() => { setTab(k); setMenu(null) }} className={item(tab === k, k === 'queue' ? 'lg:hidden' : '')}>
-          <span className="relative">
-            <Icon name={k} className="size-5 md:size-4" />
-            {k === 'queue' && total > 0 && <span className="absolute -right-3 -top-2 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] font-bold leading-4 text-white">{total}</span>}
-          </span>
-          <span className="whitespace-nowrap">{label}</span>
-        </button>
-      ))}
-      <button data-popup onClick={() => setMenu(menu === 'remote' ? null : 'remote')} className={item(menu === 'remote', 'md:hidden')}>
-        <Icon name="remote" className="size-5 md:size-4" /><span>Remote</span>
-      </button>
-    </nav>
+  const item = (on: boolean, extra = '') => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] transition duration-150 active:scale-95 lg:flex-none lg:flex-row lg:gap-2 lg:px-4 lg:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
+  const go = (k: Tab) => { setTab(k); setMenu(null); setSettings(false) }
+  const tabBtn = (k: Tab) => (
+    <button key={k} onClick={() => go(k)} className={item(!settings && tab === k)}>
+      <Icon name={k} className="size-5 lg:size-4" /><span className="whitespace-nowrap">{TABS.find(t => t[0] === k)![1]}</span>
+    </button>
   )
+  const playing = !!queue.current
+  const lg = useLg()
+  const popup = menu === 'queue' && !lg
+  const vv = useVisualViewport()
+  // The record breaks out of the bar: it is the one control that is also a status light.
+  const queueBtn = (
+    <button key="queue" data-popup onClick={() => setMenu(menu === 'queue' ? null : 'queue')} className="relative -my-6 w-[4.75rem] shrink-0 self-center transition active:scale-95" aria-label={`Queue${total ? `, ${total} songs` : ''}`} aria-pressed={menu === 'queue'}>
+      <Disc spin={playing} className={`mx-auto size-16 shadow-lg ring-4 ${menu === 'queue' ? 'ring-accent' : 'ring-white dark:ring-zinc-900'}`} />
+      {total > 0 && <span className="absolute right-0.5 top-0 min-w-5 rounded-full bg-accent px-1 text-center text-[11px] font-bold leading-5 text-white ring-2 ring-white dark:ring-zinc-900">{total}</span>}
+    </button>
+  )
+  const settingsBtn = (
+    <button key="settings" onClick={() => { setMenu(null); setSettings(!settings) }} className={item(settings)}>
+      <Icon name="settings" className="size-5" /><span>Settings</span>
+    </button>
+  )
+  const banner$ = <NowBanner current={queue.current} next={queue.items[0]} onOpen={() => setMenu('queue')} />
+  const panel = <QueuePanel view={qView} setView={setQView} queue={queue} history={history} act={act} favs={favs} />
 
   if (cfgHost === null || fails >= 3)
     return <Landing host={cfgHost ?? null} onConnected={h => { setCfgHost(h); setFails(0); refresh() }} />
 
   return (
     <CloudCtx.Provider value={cloudIds}>
-    <div className="mx-auto min-h-dvh max-w-7xl pb-28 md:pb-6">
-      {menu && <div data-dim className="animate-fade pointer-events-none fixed inset-0 z-[15] bg-black/40 max-md:pointer-events-auto max-md:touch-none md:z-[5]" />}
-      <header className={`sticky top-0 z-10 flex items-center gap-3 p-3 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
+    <div data-queue-open={popup || undefined} className={`mx-auto min-h-dvh max-w-7xl ${banner === 'toolbar' ? 'pb-44' : 'pb-28'} lg:pb-6`}>
+      {menu && !(menu === 'queue' && lg) && <div data-dim className={`animate-fade pointer-events-none fixed inset-0 z-[15] bg-black/40 max-md:pointer-events-auto max-md:touch-none md:z-[5] ${popup ? 'max-lg:pointer-events-auto max-lg:touch-none' : ''}`} />}
+      <div className={`sticky top-0 z-10 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
+      <header className="flex items-center gap-3 p-3">
         <h1 className="hidden text-lg font-bold text-accent sm:block">KTV</h1>
-        {tabs('hidden md:flex md:gap-2')}
-        {tab !== 'queue' &&
-          <div className="min-w-0 flex-1" data-popup>
-            <div className="relative">
-            <input value={q} onChange={e => setQ(e.target.value)} type="search" placeholder={`Search ${tab}…`}
-              className={`w-full rounded-xl bg-zinc-200 py-3 pl-4 ${filterable ? 'pr-40' : 'pr-4'} outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800`} />
-            {filterable && <button aria-label="Filters" onClick={() => setMenu(menu === 'filter' ? null : 'filter')}
-              className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium transition duration-150 hover:brightness-110 active:scale-95 after:content-['▾'] ${activeLabel ? 'bg-accent text-white' : 'bg-zinc-300 dark:bg-zinc-700'}`}>
-                <span className="block max-w-28 truncate">{activeLabel ?? 'Filter'}</span>
-              </button>}
-            </div>
-          </div>}
-        <div className="ml-auto flex items-center gap-2">
-          <button data-popup className={`${btn} hidden md:block ${menu === 'remote' ? '!bg-accent text-white' : ''}`} aria-label="Remote" title="Remote" onClick={() => setMenu(menu === 'remote' ? null : 'remote')}><Icon name="remote" /></button>
-          <SettingsMenu open={menu === 'theme'} setOpen={o => setMenu(o ? 'theme' : null)} />
+        <nav className="hidden lg:flex lg:gap-2">{TABS.map(([k]) => tabBtn(k))}</nav>
+        <div className={`min-w-0 flex-1 ${settings ? 'invisible' : ''}`} data-popup>
+          <div className="relative">
+          <input value={q} onChange={e => setQ(e.target.value)} type="search" placeholder={`Search ${tab}…`}
+            className="w-full rounded-xl bg-zinc-200 py-3 pl-4 pr-40 outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800" />
+          <button aria-label="Filters" onClick={() => setMenu(menu === 'filter' ? null : 'filter')}
+            className={`absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium transition duration-150 hover:brightness-110 active:scale-95 after:content-['▾'] ${activeLabel ? 'bg-accent text-white' : 'bg-zinc-300 dark:bg-zinc-700'}`}>
+              <span className="block max-w-28 truncate">{activeLabel ?? 'Filter'}</span>
+            </button>
+          </div>
+        </div>
+        <div className="ml-auto hidden items-center gap-2 lg:flex">
+          <SettingsMenu open={settings} onClick={() => { setMenu(null); setSettings(!settings) }} />
         </div>
       </header>
+      {banner === 'search' && <div className="lg:hidden">{banner$}</div>}
+      </div>
       {online !== true && (
         <div role="status" className={`mx-3 mb-2 rounded-xl px-4 py-2 text-sm ${online === false ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-zinc-200 text-zinc-500 dark:bg-zinc-800'}`}>
           {online === false ? "Can't reach the KTV machine. Retrying…" : 'Connecting to the KTV machine…'}
@@ -713,28 +863,30 @@ function App() {
 
       <div className="flex gap-6 px-3">
         <main className="min-w-0 flex-1 pt-2">
-          {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
-          {tab === 'favorites' && <SavedList name="favorites" items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
-          {tab === 'history' && <SavedList name="history" items={history} q={q} act={act} favs={favs} empty="Nothing requested yet."/>}
-          {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
-          {tab === 'queue' && <Queue items={queue.items} pending={queue.pending} current={queue.current} act={act} />}
+          {settings
+            ? <SettingsPage t={theme} online={online} host={cfgHost} favs={favList.length} history={history.length} cats={cats.length} onManage={() => setModal({ kind: 'manage' })} reload={reload} />
+            : <>
+              {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
+              {tab === 'favorites' && <SavedList name="favorites" items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
+              {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
+            </>}
         </main>
-        <aside className="sticky top-[4.5rem] -mx-1 hidden h-[calc(100dvh-6rem)] w-96 shrink-0 overflow-y-auto px-1 pt-2 lg:block">
-          <Queue items={queue.items} pending={queue.pending} current={queue.current} act={act} />
-        </aside>
+        <aside className="sticky top-[4.5rem] hidden h-[calc(100dvh-6rem)] w-96 shrink-0 pt-2 lg:block">{lg && panel}</aside>
       </div>
 
-      {tabs('fixed inset-x-3 bottom-3 z-10 flex gap-1 rounded-2xl border border-zinc-200/70 p-1.5 shadow-xl shadow-black/10 dark:border-zinc-700/60 md:hidden ' + (opaqueBars ? 'bg-white dark:bg-zinc-900' : 'bg-white/85 backdrop-blur dark:bg-zinc-900/85'))}
+      {banner === 'toolbar' && menu !== 'queue' && <div className="fixed inset-x-0 bottom-[5.75rem] z-10 lg:hidden">{banner$}</div>}
+      <nav className={'fixed inset-x-3 bottom-3 z-[25] flex gap-1 rounded-2xl border border-zinc-200/70 p-1.5 shadow-xl shadow-black/10 dark:border-zinc-700/60 lg:hidden ' + (opaqueBars ? 'bg-white dark:bg-zinc-900' : 'bg-white/85 backdrop-blur dark:bg-zinc-900/85')}>
+        {tabBtn('songs')}{tabBtn('singers')}{queueBtn}{tabBtn('favorites')}{settingsBtn}
+      </nav>
       {/* md+: same width/centering as the page container so popups line up with the header. Phones: popups are flex children above the toolbar, like Modal */}
       <div className="pointer-events-none fixed inset-0 z-20 mx-auto max-w-7xl max-md:flex max-md:items-end max-md:justify-center max-md:p-3 max-md:pb-[5.5rem]">
       {menu === 'filter' && <FilterPanel tab={tab} filter={filter} setFilter={setFilter} area={area} setArea={setArea} cats={cats} catFilter={catSel} setCatFilter={setCatFilter} close={() => setMenu(null)} />}
-      {menu === 'theme' && <SettingsPanel t={theme} onManage={() => { setMenu(null); setModal({ kind: 'manage' }) }} />}
-      {menu === 'remote' && (
-        <div data-popup className="animate-pop pointer-events-auto max-h-full w-full max-w-sm overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 md:absolute md:right-3 md:top-[4.75rem] md:max-h-[calc(100dvh-6rem)] md:w-96">
-          <Remote act={act} />
+      </div>
+      {popup && (
+        <div style={vv ? { top: vv.top, height: vv.height } : { top: 0, bottom: 0 }} className="pointer-events-none fixed inset-x-0 z-20 flex justify-center px-3 pt-3 pb-24">
+          <div data-popup className="animate-pop pointer-events-auto h-full w-full max-w-md overflow-hidden rounded-2xl bg-zinc-100 p-3 shadow-xl ring-1 ring-black/10 dark:bg-zinc-950 dark:ring-white/10">{panel}</div>
         </div>
       )}
-      </div>
       {modal?.kind === 'picker' && (() => {
         const song = modal.song, fav = favList.find(f => f.sONGBM === song.sONGBM)
         return <CategoryPicker song={song} fav={fav} cats={cats} setCat={(id, on) => setCat(song, id, on)} toggle={() => fav ? unfavorite(song.sONGBM!) : favorite(song)} onEdit={() => setModal({ kind: 'manage' })} onClose={() => setModal(null)} />
