@@ -40,6 +40,9 @@ function usePaged<T>(fetcher: (page: number) => Promise<{ items: T[]; maxPage: n
   return { items, state, hasMore: page + 1 < maxPage, more: () => load(page + 1), retry: () => load(tried.current) }
 }
 
+// Holds the last value seen while active, so a hidden (but mounted) tab keeps its cached list instead of requerying.
+function useFrozen<T>(v: T, active: boolean) { const r = useRef(v); if (active) r.current = v; return r.current }
+
 // Infinite scroll: fetch the next page when the sentinel is within 600px of the viewport.
 function Status({ state, empty, hasMore, more, retry }: { state: string; empty: boolean; hasMore: boolean; more: () => void; retry: () => void }) {
   const el = useRef<HTMLDivElement>(null)
@@ -765,6 +768,9 @@ function App() {
     getCategories().then(c => Array.isArray(c) && setCats(c)).catch(() => {})
   }, [])
   useEffect(() => { reload() }, [tab, reload])
+  // Songs and singers stay mounted (hidden) so their lists are cached across tab switches.
+  const sq = useFrozen(q, tab === 'songs'), sf = useFrozen(filter, tab === 'songs')
+  const gq = useFrozen(q, tab === 'singers'), ga = useFrozen(area, tab === 'singers')
   const flash = (text: string, tone?: 'error') => {
     setToast({ text, tone, on: true }); clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), 2500)
@@ -887,9 +893,9 @@ function App() {
           {settings
             ? <SettingsPage t={theme} online={online} host={cfgHost} favs={favList.length} history={history.length} cats={cats.length} onManage={() => setModal({ kind: 'manage' })} reload={reload} />
             : <>
-              {tab === 'songs' && <Songs q={q} act={from(act, 'songs')} filter={filter} epoch={epoch} favs={favs} />}
+              <div hidden={tab !== 'songs'}><Songs q={sq} act={from(act, 'songs')} filter={sf} epoch={epoch} favs={favs} /></div>
               {tab === 'favorites' && <SavedList name="favorites" items={shownFavs} q={q} cat={catSel} act={from(act, 'favorites')} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
-              {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
+              <div hidden={tab !== 'singers'}><Singers epoch={epoch} q={gq} area={ga} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} /></div>
             </>}
         </main>
         <aside className="sticky top-[4.5rem] hidden h-[calc(100dvh-6rem)] w-96 shrink-0 pt-2 lg:block">{lg && panel}</aside>
