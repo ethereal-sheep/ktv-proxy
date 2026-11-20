@@ -1,15 +1,20 @@
 import { createContext, useContext, useEffect, useState, type ComponentType } from 'react'
 import { AudioLines, Check, Cloud, CloudDownload, GripVertical, Heart, HeartCrack, LoaderCircle, History, ListStart, ListMusic, Mic, MicVocal, Music, Pencil, Plus, RotateCcw, Settings, SkipBack, SkipForward, SlidersHorizontal, Play, Tag, Trash2, VolumeX, X } from 'lucide-react'
 
-export type Banner = 'off' | 'search' | 'toolbar'
-export type Settings = { opaqueBars: boolean; svgIcons: boolean; showMic: boolean; showMusic: boolean; longPopups: boolean; helperLabels: boolean; hideAltNames: boolean; playerControls: boolean; banner: Banner }
+export type Banner = 'top' | 'toolbar'
+export type Settings = { opaqueBars: boolean; svgIcons: boolean; showMic: boolean; showMusic: boolean; longPopups: boolean; helperLabels: boolean; hideAltNames: boolean; playerControls: boolean; bannerOn: boolean; banner: Banner; bannerSpeed: number }
 type Flag = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings]
-const DEFAULTS: Settings = { opaqueBars: false, svgIcons: true, showMic: false, showMusic: false, longPopups: false, helperLabels: false, hideAltNames: true, playerControls: true, banner: 'off' }
+const DEFAULTS: Settings = { opaqueBars: true, svgIcons: true, showMic: false, showMusic: false, longPopups: false, helperLabels: false, hideAltNames: true, playerControls: true, bannerOn: false, banner: 'top', bannerSpeed: 40 }
 
 export function useSettingsState() {
-  const [s, set] = useState<Settings>(() => ({ ...DEFAULTS, ...JSON.parse(localStorage.getItem('settings') ?? '{}') }))
+  const [s, set] = useState<Settings>(() => {
+    const saved = JSON.parse(localStorage.getItem('settings') ?? '{}')
+    // Older versions stored banner as 'off' | 'search' | 'toolbar'.
+    const old = saved.bannerOn === undefined && typeof saved.banner === 'string'
+    return { ...DEFAULTS, ...saved, ...(old ? { bannerOn: saved.banner !== 'off', banner: saved.banner === 'toolbar' ? 'toolbar' : 'top' } : {}) }
+  })
   useEffect(() => localStorage.setItem('settings', JSON.stringify(s)), [s])
-  return { ...s, toggle: (k: Flag) => set(prev => ({ ...prev, [k]: !prev[k] })), setBanner: (banner: Banner) => set(prev => ({ ...prev, banner })) }
+  return { ...s, toggle: (k: Flag) => set(prev => ({ ...prev, [k]: !prev[k] })), setBanner: (banner: Banner) => set(prev => ({ ...prev, banner })), setBannerSpeed: (bannerSpeed: number) => set(prev => ({ ...prev, bannerSpeed })) }
 }
 
 export const SettingsCtx = createContext<Settings>(DEFAULTS)

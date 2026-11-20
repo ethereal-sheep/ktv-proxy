@@ -1,5 +1,5 @@
 import useEmblaCarousel from 'embla-carousel-react'
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { clearList, addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
@@ -373,14 +373,15 @@ function QueuePanel({ view, setView, queue, history, act, favs }: { view: QView;
 
 // Phones: a full-width headline ticker, Now playing then Up next, scrolling right to left. Tap opens the queue. Motion-reduced: a still line.
 function NowBanner({ current, next, onOpen }: { current: Song | null; next?: Song; onOpen: () => void }) {
-  const line = (label: string, s: Song) => <><b className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent">{label}</b>{s.sONGNAME} <span className="text-zinc-500">{s.sINGER}</span></>
-  const parts = [current && line('Now playing', current), next && line('Up next', next)].filter(Boolean)
+  const { bannerSpeed } = useContext(SettingsCtx)
+  const line = (label: string, s: Song, now?: boolean) => <span className={`inline-flex items-center ${now ? '' : 'opacity-75'}`}><b className={`mr-2.5 rounded-sm px-1.5 py-0.5 leading-none text-[10px] font-bold uppercase tracking-[0.18em] ${now ? 'bg-white text-[color-mix(in_srgb,var(--accent)_100%,black)]' : 'border border-white/60 text-white'}`}>{label}</b><span className={now ? 'font-bold' : 'font-normal'}>{s.sONGNAME}</span><span aria-hidden className="mx-2.5 h-3 w-px bg-white/50" /><span className="text-white/70">{s.sINGER}</span></span>
+  const parts = [current && line('Now playing', current, true), next && line('Up next', next)].filter(Boolean)
   if (!parts.length) return null
   const chars = (current ? current.sONGNAME.length + current.sINGER.length : 0) + (next ? next.sONGNAME.length + next.sINGER.length : 0)
-  const text = <span className="inline-flex min-w-[100vw] shrink-0 items-center gap-10 pr-10">{parts.map((p, i) => <span key={i}>{p}</span>)}</span>
+  const text = <span className="inline-flex min-w-[100vw] shrink-0 items-center gap-8 pr-8">{parts.map((p, i) => <Fragment key={i}><span>{p}</span><span aria-hidden className="size-1.5 rotate-45 bg-white/50" /></Fragment>)}</span>
   return (
-    <button data-popup onClick={onOpen} aria-label="Now playing and up next. Open queue" className="block h-10 w-full overflow-hidden bg-[color-mix(in_srgb,var(--accent)_18%,#fafafa)] text-sm dark:bg-[color-mix(in_srgb,var(--accent)_22%,#09090b)]">
-      <div className="flex h-full w-max animate-marquee items-center whitespace-nowrap" style={{ ['--d' as string]: `${Math.max(390, chars * 9 + 160) / 80}s` }}>
+    <button data-popup onClick={onOpen} aria-label="Now playing and up next. Open queue" className="block h-9 w-full overflow-hidden bg-[color-mix(in_srgb,var(--accent)_62%,black)] font-mono text-sm text-white shadow-md shadow-black/20">
+      <div className="flex h-full w-max animate-marquee items-center whitespace-nowrap" style={{ ['--d' as string]: `${Math.max(390, chars * 9 + 160) / bannerSpeed}s` }}>
         {text}<span aria-hidden>{text}</span>
       </div>
     </button>
@@ -461,24 +462,26 @@ function SettingsPage({ t, online, host, favs, history, cats, onManage, reload }
             <Toggle label="Helper labels" on={st.helperLabels} onClick={() => st.toggle('helperLabels')} />
             <Toggle label="Hide secondary names" on={st.hideAltNames} onClick={() => st.toggle('hideAltNames')} />
             <Toggle label="Longer popups" on={st.longPopups} onClick={() => st.toggle('longPopups')} />
-            <div className="pt-1 lg:hidden">
-              <div className="px-1 pb-1 text-sm">Now-playing banner</div>
-              <div className="flex gap-1">
-                {([['off', 'Off'], ['search', 'Under search'], ['toolbar', 'Above toolbar']] as const).map(([v, l]) => (
+          </section>
+          <section className={`${section} lg:hidden`}>
+            <h4 className={H}>Now playing banner</h4>
+            <Toggle label="Show banner" on={st.bannerOn} onClick={() => st.toggle('bannerOn')} />
+            {st.bannerOn && <>
+              <div className="flex gap-1 pt-1">
+                {([['top', 'Screen top'], ['toolbar', 'Above toolbar']] as const).map(([v, l]) => (
                   <button key={v} onClick={() => st.setBanner(v)} className={`min-h-11 flex-1 rounded-lg px-1 text-sm transition active:scale-95 ${st.banner === v ? 'bg-accent text-white' : 'bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{l}</button>
                 ))}
               </div>
-            </div>
+              <label className="flex items-center gap-3 px-1 pt-2 text-sm">Speed
+                <input type="range" min={30} max={200} step={10} value={st.bannerSpeed} onChange={e => st.setBannerSpeed(+e.target.value)} className="h-11 flex-1 accent-accent" />
+              </label>
+            </>}
           </section>
           <section className={section}>
             <h4 className={H}>Remote</h4>
             <Toggle label="Playback controls" on={st.playerControls} onClick={() => st.toggle('playerControls')} />
-            <Toggle label="Music controls (volume, mute, key)" on={st.showMusic} onClick={() => st.toggle('showMusic')} />
+            <Toggle label="Music controls" on={st.showMusic} onClick={() => st.toggle('showMusic')} />
             <Toggle label="Mic controls" on={st.showMic} onClick={() => st.toggle('showMic')} />
-          </section>
-          <section className={section}>
-            <h4 className={H}>Favorites</h4>
-            <button onClick={onManage} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories <span className="tabular-nums text-zinc-500">· {cats}</span></button>
           </section>
         </div>
         <div className="space-y-3">
@@ -490,6 +493,10 @@ function SettingsPage({ t, online, host, favs, history, cats, onManage, reload }
               <Fact label="Status" value={<span className={status[1]}>{status[0]}</span>} />
             </dl>
             <a href="/api/docs" className="flex min-h-11 items-center text-sm text-accent hover:underline">API docs</a>
+          </section>
+          <section className={section}>
+            <h4 className={H}>Favorites</h4>
+            <button onClick={onManage} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories <span className="tabular-nums text-zinc-500">· {cats}</span></button>
           </section>
           <section className={section}>
             <h4 className={H}>Data</h4>
@@ -697,7 +704,7 @@ export default function Root() {
 
 function App() {
   const theme = useTheme() // must live here: it applies dark mode/accent to the page, so it has to stay mounted
-  const { opaqueBars, longPopups, banner } = useContext(SettingsCtx)
+  const { opaqueBars, longPopups, bannerOn, banner } = useContext(SettingsCtx)
   const [tab, setTab] = useState<Tab>('songs')
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>({})
@@ -833,13 +840,14 @@ function App() {
 
   return (
     <CloudCtx.Provider value={cloudIds}>
-    <div data-queue-open={popup || undefined} className={`mx-auto min-h-dvh max-w-7xl ${banner === 'toolbar' ? 'pb-44' : 'pb-28'} lg:pb-6`}>
+    <div data-queue-open={popup || undefined} className={`mx-auto min-h-dvh max-w-7xl ${bannerOn && banner === 'toolbar' ? 'pb-44' : 'pb-28'} lg:pb-6`}>
       {menu && !(menu === 'queue' && lg) && <div data-dim className={`animate-fade pointer-events-none fixed inset-0 z-[15] bg-black/40 max-md:pointer-events-auto max-md:touch-none md:z-[5] ${popup ? 'max-lg:pointer-events-auto max-lg:touch-none' : ''}`} />}
       <div className={`sticky top-0 z-10 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
-      <header className="flex items-center gap-3 p-3">
+      {bannerOn && banner === 'top' && <div className="lg:hidden">{banner$}</div>}
+      <header className={`flex items-center gap-3 p-3 ${settings ? 'max-lg:hidden' : ''}`}>
         <h1 className="hidden text-lg font-bold text-accent sm:block">KTV</h1>
         <nav className="hidden lg:flex lg:gap-2">{TABS.map(([k]) => tabBtn(k))}</nav>
-        <div className={`min-w-0 flex-1 ${settings ? 'invisible' : ''}`} data-popup>
+        <div className={`min-w-0 flex-1 ${settings ? 'hidden' : ''}`} data-popup>
           <div className="relative">
           <input value={q} onChange={e => setQ(e.target.value)} type="search" placeholder={`Search ${tab}…`}
             className="w-full rounded-xl bg-zinc-200 py-3 pl-4 pr-40 outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800" />
@@ -853,8 +861,7 @@ function App() {
           <SettingsMenu open={settings} onClick={() => { setMenu(null); setSettings(!settings) }} />
         </div>
       </header>
-      {banner === 'search' && <div className="lg:hidden">{banner$}</div>}
-      </div>
+            </div>
       {online !== true && (
         <div role="status" className={`mx-3 mb-2 rounded-xl px-4 py-2 text-sm ${online === false ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-zinc-200 text-zinc-500 dark:bg-zinc-800'}`}>
           {online === false ? "Can't reach the KTV machine. Retrying…" : 'Connecting to the KTV machine…'}
@@ -862,7 +869,7 @@ function App() {
       )}
 
       <div className="flex gap-6 px-3">
-        <main className="min-w-0 flex-1 pt-2">
+        <main className={`min-w-0 flex-1 ${settings ? "pt-6 lg:pt-2" : "pt-2"}`}>
           {settings
             ? <SettingsPage t={theme} online={online} host={cfgHost} favs={favList.length} history={history.length} cats={cats.length} onManage={() => setModal({ kind: 'manage' })} reload={reload} />
             : <>
@@ -874,7 +881,7 @@ function App() {
         <aside className="sticky top-[4.5rem] hidden h-[calc(100dvh-6rem)] w-96 shrink-0 pt-2 lg:block">{lg && panel}</aside>
       </div>
 
-      {banner === 'toolbar' && menu !== 'queue' && <div className="fixed inset-x-0 bottom-[5.75rem] z-10 lg:hidden">{banner$}</div>}
+      {bannerOn && banner === 'toolbar' && menu !== 'queue' && <div className="fixed inset-x-0 bottom-[5.75rem] z-10 lg:hidden">{banner$}</div>}
       <nav className={'fixed inset-x-3 bottom-3 z-[25] flex gap-1 rounded-2xl border border-zinc-200/70 p-1.5 shadow-xl shadow-black/10 dark:border-zinc-700/60 lg:hidden ' + (opaqueBars ? 'bg-white dark:bg-zinc-900' : 'bg-white/85 backdrop-blur dark:bg-zinc-900/85')}>
         {tabBtn('songs')}{tabBtn('singers')}{queueBtn}{tabBtn('favorites')}{settingsBtn}
       </nav>
