@@ -6,7 +6,7 @@ export type Mode = 'system' | 'light' | 'dark'
 const get = <T,>(k: string, d: T) => (localStorage.getItem(k) as T | null) ?? d
 
 export function useTheme() {
-  const [mode, setMode] = useState<Mode>(get('mode', 'system'))
+  const [mode, setMode] = useState<Mode>(get('mode', 'dark'))
   const [accent, setAccent] = useState<keyof typeof ACCENTS>(get('accent', 'pink'))
   useEffect(() => {
     const mq = matchMedia('(prefers-color-scheme: dark)')

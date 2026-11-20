@@ -263,6 +263,12 @@ function SolidMic({ off }: { off?: boolean }) {
 }
 
 // The first four Remote panel actions.
+const REMOTE_LABELS: Record<string, string> = {
+  'toggle-vocal': 'Switched Original / Karaoke', replay: 'Replaying', 'play-pause': 'Play / Pause sent', skip: 'Skipped', mute: 'Mute toggled',
+  'music-volume-up': 'Music volume up', 'music-volume-down': 'Music volume down', 'music-key-up': 'Key up', 'music-key-down': 'Key down',
+  'mic-volume-up': 'Mic volume up', 'mic-volume-down': 'Mic volume down', 'mic-echo-up': 'Echo up', 'mic-echo-down': 'Echo down',
+  'mic-reverb-up': 'Reverb up', 'mic-reverb-down': 'Reverb down',
+}
 const PLAYER_CONTROLS: [string, string, IconName, boolean?][] = [['Original / Karaoke', 'toggle-vocal', 'karaoke'], ['Replay', 'replay', 'restart', true], ['Play / Pause', 'play-pause', 'play', true], ['Skip', 'skip', 'skip', true]]
 function Queue({ items, pending, current, act }: { items: Song[]; pending: Song[]; current: Song | null; act: Act }) {
   const { playerControls } = useContext(SettingsCtx)
@@ -651,7 +657,7 @@ function App() {
       clearTimeout(toastTimer.current)
       toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), longPopups ? 4500 : 2500)
     }
-    command(action, val, song).then(() => { show(label ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
+    command(action, val, song).then(() => { show(label ?? REMOTE_LABELS[action] ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Not sent · can't reach the KTV machine", undefined, 'error'); refresh() })
   }
 
   const cloudIds = useMemo(() => ({ pending: new Set(queue.pending.map(p => String(p.sONGBM))), downloaded: new Set(queue.downloaded) }), [queue.pending, queue.downloaded])
