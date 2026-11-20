@@ -4,6 +4,7 @@ import { networkInterfaces } from 'node:os'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { match } from 'pinyin-pro'
 import { addCategory, addFavorite, cleanName, deleteCategory, isSong, type Song, reorderCategories, listCategories, listFavorites, listHistory, recordHistory, removeFavorite, renameCategory, setDbDir, setSongCategory } from './db.ts'
 
 const PORT = 8084
@@ -100,34 +101,46 @@ type QSong = Song & { xH?: string }
 const qkey = (s: QSong) => String(s.xH ?? s.sONGBM) // the box sends xH as a number; the routes carry it as a string
 const UNKNOWN: Song = { sONGBM: '', sONGNAME: '???', sINGER: '???' } // playing, but we never saw which song started
 let idleSeen = false // right after a song change the box briefly reports count 1 with the next song still listed, so idle needs two polls
-let current: Song | null = null, prev: { items: QSong[]; playing: boolean } | null = null
+let glitchSeen = false // Pro2 (move to next) re-queues the song, so for ~50ms the box lists nothing while still counting it
+let current: Song | null = null, prev: { items: QSong[]; count: number; playing: boolean } | null = null
 const pending: { song: Song; cloud: boolean; at: number }[] = [] // adds not yet seen in the queue; cloud ones sit here while downloading
+const downloaded = new Set<string>() // cloud songs now stored on the box: they queue like normal songs (lost on restart, then the next request just re-learns it)
 const removed = new Set<string>() // keys we sent Del1 for: leaving the head then means deleted, not started
+// pending: cloud songs still downloading, which the box doesn't list
+const snapshot = (items: QSong[], count: number) => ({ items, count, current, downloaded: [...downloaded], pending: pending.filter(p => p.cloud).map(p => p.song) })
+function settle(i: number) { // a pending add is resolved: it queued or started, so a cloud song is stored now
+  const [p] = pending.splice(i, 1)
+  if (p.cloud) downloaded.add(String(p.song.sONGBM))
+  return p
+}
 async function pollQueue() {
-  let d: Record<string, string>
-  try { d = await callBox('PlaylistServlet', { onSelectPage: 'true' }) } catch { return }
+  const d = await callBox('PlaylistServlet', { onSelectPage: 'true' })
   const items: QSong[] = rows(d, 'songList'), playing = +d.number - items.length > 0
-  if (!playing && prev?.playing && !idleSeen) { idleSeen = true; return }
+  if (!playing && prev?.playing && !idleSeen) { idleSeen = true; return snapshot(items, +d.number) }
   idleSeen = false
   const keys = new Set(items.map(qkey)), seen = new Set(prev?.items.map(qkey))
-  for (const s of items) if (!seen.has(qkey(s))) { const i = pending.findIndex(p => p.song.sONGBM === s.sONGBM); if (i >= 0) pending.splice(i, 1) }
+  for (const s of items) if (!seen.has(qkey(s))) { const i = pending.findIndex(p => p.song.sONGBM === s.sONGBM); if (i >= 0) settle(i) }
   const head = prev?.items[0]
-  const headStarted = head && !keys.has(qkey(head)) && !removed.has(qkey(head))
-  if (headStarted) current = head
+  const headGone = head && !keys.has(qkey(head)) && !removed.has(qkey(head))
+  if (headGone && +d.number >= prev!.count && !glitchSeen) { glitchSeen = true; return snapshot(prev!.items, prev!.count) } // a real start lowers the count; skip that poll once
+  glitchSeen = false
+  if (headGone) current = head
   else if (playing && !prev?.playing) { // started with nothing visible in the queue: the oldest add must have started (non-cloud ones start almost instantly)
     const i = Math.max(0, pending.findIndex(p => !p.cloud))
-    current = pending.length ? pending.splice(i, 1)[0].song : UNKNOWN
+    current = pending.length ? settle(i).song : UNKNOWN
   }
   if (!playing) current = null
   else current ??= UNKNOWN
   // shortcut: a download that never finishes is dropped after 3 min (a guess; the box took 40-60s)
   for (let i = pending.length; i--; ) if (Date.now() - pending[i].at > 180_000) pending.splice(i, 1)
   for (const k of removed) if (!keys.has(k)) removed.delete(k)
-  prev = { items, playing }
+  prev = { items, count: +d.number, playing }
+  return snapshot(items, +d.number)
 }
-let polling = Promise.resolve() // one poll at a time: the diff needs polls in order
-const poll = () => void (polling = polling.then(pollQueue))
-setInterval(poll, 3000).unref()
+let polling: Promise<unknown> = Promise.resolve() // one poll at a time: the diff needs polls in order
+const poll = () => { const p = polling.then(pollQueue); polling = p.catch(() => {}); return p }
+const pollQuietly = () => void poll().catch(() => {})
+setInterval(pollQuietly, 3000).unref()
 
 const fromBox = (res: ServerResponse, servlet: string, params: Record<string, string>, shape: (d: Record<string, string>) => unknown) =>
   void callBox(servlet, params).then(d => json(res, 200, shape(d))).catch(e => {
@@ -198,10 +211,15 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     return json(res, 200, {})
   }
   // Favorites and history live in SQLite (server/db.ts); each action is one row operation, so devices can't overwrite each other's lists.
-  const list = url.match(/^\/api\/(favorites|history)(?:\/([^/]+))?$/)
+  const list = path.match(/^\/api\/(favorites|history)(?:\/([^/]+))?$/)
   if (list) {
     const [, name, bm] = list
-    if (req.method === 'GET' && !bm) return json(res, 200, name === 'favorites' ? listFavorites() : listHistory())
+    if (req.method === 'GET' && !bm) {
+      const all = name === 'favorites' ? listFavorites() : listHistory() as Song[]
+      const q = (new URL(url, 'http://x').searchParams.get('q') ?? '').trim().toLowerCase()
+      // q: plain text, or pinyin / initials like the box's own search (done here so the browser doesn't ship the pinyin table)
+      return json(res, 200, q ? all.filter(s => [s.sONGNAME, s.sINGER].some(t => t.toLowerCase().includes(q) || match(t, q))) : all)
+    }
     if (req.method === 'DELETE' && bm && name === 'favorites') { removeFavorite(decodeURIComponent(bm)); return json(res, 200, {}) }
     if (req.method === 'POST' && !bm) return void readBody(req).then(b => {
       let song: unknown
@@ -217,24 +235,29 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     { songName: g('q'), songType: g('songType'), singer: g('singer'), lang: g('lang'), sortType: g('sortType'), page: g('page') || '0' }, d => ({ items: rows(d, 'songList'), maxPage: +d.maxPage }))
   if (path === '/api/singers' && req.method === 'GET') return fromBox(res, 'SingerServlet',
     { singer: g('q'), singerType: g('type'), sortType: '', page: g('page') || '0' }, d => ({ items: rows(d, 'singerList'), maxPage: +d.maxPage }))
-  if (path === '/api/queue' && req.method === 'GET') return fromBox(res, 'PlaylistServlet', { onSelectPage: 'true' }, d => ({ items: rows(d, 'songList'), count: +d.number }))
+  // items and current come from the same box reading, so they never disagree
+  if (path === '/api/queue' && req.method === 'GET') return void poll().then(q => json(res, 200, q)).catch(e => {
+    console.error('box PlaylistServlet failed:', e.message)
+    json(res, e.message === 'no host configured' ? 503 : 502, { error: e.message })
+  })
   // Songs are addressed by id (sONGBM) when adding, and by queue key (xH) once queued.
   const command = (cmd: string, cmdValue: string, add?: { song: Song; cloud: boolean }) => {
     if (cmd === 'Del1') removed.add(cmdValue)
     if (add) pending.push({ ...add, at: Date.now() })
     fromBox(res, 'CommandServlet', { cmd, cmdValue }, d => d)
-    poll() // pick up the change now instead of in 3s
+    pollQuietly() // pick up the change now instead of in 3s
   }
   if (path === '/api/queue/songs' && req.method === 'POST') return void readBody(req).then(b => {
     let c: { id?: unknown; next?: unknown; cloud?: unknown; song?: unknown } = {}
     try { c = JSON.parse(b) } catch { /* falls through to the 400 */ }
     if (typeof c.id !== 'string' || !c.id) return json(res, 400, { error: 'expected id' })
-    command(c.next ? 'Pro1' : 'Add1', c.id, { song: isSong(c.song) ? c.song : { ...UNKNOWN, sONGBM: c.id }, cloud: c.cloud === true })
+    const cloud = c.cloud === true && !downloaded.has(c.id)
+    if (cloud && pending.some(p => p.cloud && p.song.sONGBM === c.id)) return json(res, 409, { error: 'already downloading' }) // the box ignores a second request while one is downloading
+    command(c.next ? 'Pro1' : 'Add1', c.id, { song: isSong(c.song) ? c.song : { ...UNKNOWN, sONGBM: c.id }, cloud })
   })
   const queued = path.match(/^\/api\/queue\/songs\/([^/]+)$/)
   if (queued && req.method === 'POST') return command('Pro2', decodeURIComponent(queued[1])) // move an already-queued song to play next
   if (queued && req.method === 'DELETE') return command('Del1', decodeURIComponent(queued[1]))
-  if (path === '/api/player/current' && req.method === 'GET') return json(res, 200, { song: current, playing: current !== null })
   const act = path.match(/^\/api\/player\/([^/]+)$/)
   if (act && req.method === 'POST') return Object.hasOwn(ACTIONS, act[1]) ? command(ACTIONS[act[1]], '') : json(res, 400, { error: 'unknown action' })
   const pic = path.match(/^\/api\/singers\/picture\/([^/]+)$/)

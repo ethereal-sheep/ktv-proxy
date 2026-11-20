@@ -13,7 +13,7 @@ async function get<T>(url: string, params: Record<string, string | number> = {})
 
 export const searchSongs = (q: string, f: Filter, page: number) => get<{ items: Song[]; maxPage: number }>('/api/songs', { q, ...f, page })
 export const searchSingers = (q: string, type: number, page: number) => get<{ items: Singer[]; maxPage: number }>('/api/singers', { q, type, page })
-export const getQueue = () => get<{ items: Song[]; count: number }>('/api/queue')
+export const getQueue = () => get<{ items: Song[]; count: number; current: Song | null; pending: Song[]; downloaded: string[] }>('/api/queue') // pending: cloud songs still downloading; current: the inferred playing song (null when idle)
 // One entry point for every box action; queue edits go to /api/queue/songs, the rest are remote-control buttons under /api/player.
 export const command = (action: string, value = '', info?: Song) => {
   const song = `/api/queue/songs/${encodeURIComponent(value)}`
@@ -49,6 +49,7 @@ const send = async (url: string, method: string, body?: unknown) => {
   return d
 }
 export const getList = (name: ListName) => fetch(`/api/${name}`).then(r => r.json() as Promise<Song[]>)
+export const searchList = (name: ListName, q: string) => fetch(`/api/${name}?q=${encodeURIComponent(q)}`).then(r => r.json() as Promise<Song[]>)
 export const addFavorite = (s: Song) => send('/api/favorites', 'POST', slim(s))
 export const removeFavorite = (bm: string) => send(`/api/favorites/${encodeURIComponent(bm)}`, 'DELETE')
 export const recordHistory = (s: Song) => send('/api/history', 'POST', slim(s))

@@ -1,5 +1,5 @@
-import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
 
@@ -94,18 +94,22 @@ const fit = (t: string, base: number, from: number, min: number) => {
   return { fontSize: Math.max(min, Math.min(base, (base * from) / w)) }
 }
 
-function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; favs?: Favs }) {
+// Cloud songs being downloaded, and ones already stored (those queue like normal songs).
+const CloudCtx = createContext({ pending: new Set<string>(), downloaded: new Set<string>() })
+
+function SongRow({ s, act, queue, favs, downloading, first }: { s: Song; act: Act; queue?: boolean; favs?: Favs; downloading?: boolean; first?: boolean }) {
   const { helperLabels } = useContext(SettingsCtx)
   const lbl = (t: string) => helperLabels && <span className="text-[10px] font-normal leading-none">{t}</span>
   const col = ' flex flex-col items-center gap-1'
-  const cloud = String(s.cLOUD) === '1'
+  const { pending, downloaded } = useContext(CloudCtx)
+  const cloud = String(s.cLOUD) === '1' && (downloading || !queue) && !downloaded.has(String(s.sONGBM)) // the flag stays 1 after the download
   const [pop, setPop] = useState<{ x: number; y: number } | null>(null) // where the double tap landed; plays the heart animation
   const g = useRowGesture(() => favs?.open(s), (x, y) => { if (favs?.add(s)) setPop({ x, y }) })
   const liked = !queue && !!favs?.has(s)
   const singers = s.sINGER.split(/\s*,\s*/).filter(Boolean) // the box joins co-singers with a bare comma; wrap between singers, not inside a name
   return (
     <li {...(queue || !favs ? {} : g.handlers)} tabIndex={queue || !favs ? undefined : 0} onKeyDown={e => e.key === 'Enter' && e.target === e.currentTarget && favs?.open(s)}
-      className={`relative flex touch-manipulation select-none items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-[box-shadow,background-color] hover:shadow-md dark:bg-zinc-900 ${g.holding ? 'bg-accent/5 ring-2 ring-accent/40 duration-300' : 'duration-150'}`}>
+      className={`relative flex touch-manipulation select-none items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-[box-shadow,background-color] hover:shadow-md dark:bg-zinc-900 ${g.holding ? 'bg-accent/5 ring-2 ring-accent/40 duration-300' : 'duration-150'} ${downloading ? 'opacity-60' : ''}`}>
       {(liked || cloud) && <span className="absolute -left-1 -top-2 z-[1] flex items-center gap-1 drop-shadow">
         {liked && <Icon name="favorites" className={`size-5 fill-current text-pink-500 ${pop ? 'animate-heart-pop' : ''}`} />}
         {cloud && <span title="Cloud song: downloads when requested" className="flex items-center gap-1 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-500"><Icon name="cloud" className="size-5 fill-current" />{helperLabels && <span>Cloud</span>}</span>}
@@ -115,12 +119,14 @@ function SongRow({ s, act, queue, favs }: { s: Song; act: Act; queue?: boolean; 
         <div style={fit(s.sONGNAME, 16, 34, 13)} className="break-words font-medium leading-snug">{s.sONGNAME}</div>
         <div style={fit(s.sINGER, 14, 40, 11)} className="break-words text-zinc-500">{singers.map((n, i) => <span key={i}><span className="inline-block max-w-full">{n}{i < singers.length - 1 && ','}</span>{' '}</span>)}</div>
       </div>
-      {queue ? <>
-        <button className={btn + col} title="Play next" onClick={() => act('move-next', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
+      {downloading ? <span className="flex items-center gap-2 px-2 text-xs font-medium text-sky-500"><Icon name="loading" className="size-4 animate-spin" />Downloading</span> : queue ? <>
+        <button disabled={first} className={btn + col + ' disabled:pointer-events-none disabled:opacity-40'} title="Play next" onClick={() => act('move-next', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
         <button className={btn + col} title="Remove" onClick={() => act('remove', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
-      </> : <>
-        <button className={btn + col} title="Play next" onClick={() => act('play-song-next', s.sONGBM, cloud ? `Cloud request sent · plays next · ${s.sONGNAME}` : `Playing next · ${s.sONGNAME}`, cloud ? 'cloud' : 'next', s)}><Icon name="next" />{lbl('Next')}</button>
-        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('add-song', s.sONGBM, cloud ? `Cloud request sent · queued · ${s.sONGNAME}` : `Added · ${s.sONGNAME}`, cloud ? 'cloud' : 'add', s)}><Icon name="add" />{lbl('Add')}</button>
+      </> : cloud ? (
+        <button disabled={pending.has(String(s.sONGBM))} className="flex flex-col items-center gap-1 rounded-xl bg-sky-500 px-4 py-3 text-sm font-semibold text-white transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-sky-500/40 active:translate-y-0 active:scale-90 disabled:pointer-events-none disabled:opacity-40" title="Request download" onClick={() => act('add-song', s.sONGBM, `Cloud request sent · queued · ${s.sONGNAME}`, 'cloud', s)}><Icon name="download" />{lbl('Request')}</button>
+      ) : <>
+        <button className={btn + col} title="Play next" onClick={() => act('play-song-next', s.sONGBM, `Playing next · ${s.sONGNAME}`, 'next', s)}><Icon name="next" />{lbl('Next')}</button>
+        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('add-song', s.sONGBM, `Added · ${s.sONGNAME}`, 'add', s)}><Icon name="add" />{lbl('Add')}</button>
       </>}
     </li>
   )
@@ -195,18 +201,25 @@ function Songs({ q, act, filter, epoch, favs }: { q: string; act: Act; filter: F
   const p = usePaged(page => searchSongs(q, filter, page), [q, fkey(filter), epoch], s => s.sONGBM)
   return (
     <>
-      <ul className="grid gap-2 pt-2 xl:grid-cols-2">{p.items.map((s, i) => <SongRow key={`${s.sONGBM}-${i}`} s={s} act={act} favs={favs} />)}</ul>
+      <ul className="grid gap-2 xl:grid-cols-2">{p.items.map((s, i) => <SongRow key={`${s.sONGBM}-${i}`} s={s} act={act} favs={favs} />)}</ul>
       <Status state={p.state} empty={!p.items.length} hasMore={p.hasMore} more={p.more} retry={p.retry} />
     </>
   )
 }
 
-function SavedList({ items, q, act, favs, empty, note }: { items: Song[]; q: string; act: Act; favs: Favs; empty: string; note?: string }) {
+function SavedList({ name, items, q, act, favs, empty }: { name: ListName; items: Song[]; q: string; act: Act; favs: Favs; empty: string }) {
   const n = q.trim().toLowerCase()
+  // the server matches (incl. pinyin); until it answers, or if it can't, fall back to plain text
+  const [hits, setHits] = useState<{ ids: Set<string> } | null>(null) // kept while typing, so the list doesn't blank between keystrokes
+  useEffect(() => {
+    if (!n) { setHits(null); return }
+    const t = setTimeout(() => searchList(name, n).then(l => Array.isArray(l) && setHits({ ids: new Set(l.map(s => s.sONGBM!)) })).catch(() => {}), 150)
+    return () => clearTimeout(t)
+  }, [name, n])
   if (!items.length) return <p className="p-6 text-center text-zinc-500">{empty}</p>
-  items = n ? items.filter(s => (s.sONGNAME + ' ' + s.sINGER).toLowerCase().includes(n)) : items
+  if (n && hits) items = items.filter(s => hits.ids.has(s.sONGBM!)) // no answer yet: keep showing the unfiltered list rather than a blank
   if (!items.length) return <p className="p-6 text-center text-zinc-500">Nothing found.</p>
-  return <>{note && <p className="mb-2 px-1 text-xs text-zinc-500">{note}</p>}<ul className="grid gap-2 pt-2 xl:grid-cols-2">{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul></>
+  return <ul className="grid gap-2 xl:grid-cols-2">{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul>
 }
 
 function SingerCard({ s, onPick }: { s: Singer; onPick: () => void }) {
@@ -236,12 +249,52 @@ function Singers({ q, area, onPick, epoch }: { q: string; area: number; onPick: 
   )
 }
 
-function Queue({ items, act }: { items: Song[]; act: Act }) {
-  if (!items.length) return <p className="p-6 text-center text-zinc-500">Queue is empty.</p>
+// A filled mic (lucide's are outline only), crossed out when `off`.
+function SolidMic({ off }: { off?: boolean }) {
+  const { svgIcons } = useContext(SettingsCtx)
+  if (!svgIcons) return <span aria-hidden className="leading-none">{off ? '🔇' : '🎤'}</span>
   return (
-    <ul className="grid gap-2">
-      {items.map(s => <SongRow key={s.xH} s={s} act={act} queue />)}
-    </ul>
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <rect x="9" y="2" width="6" height="13" rx="3" fill="currentColor" stroke="none" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" />
+      {off && <path d="M3 3l18 18" />}
+    </svg>
+  )
+}
+
+// The first four Remote panel actions.
+const PLAYER_CONTROLS: [string, string, IconName, boolean?][] = [['Original / Karaoke', 'toggle-vocal', 'karaoke'], ['Replay', 'replay', 'restart', true], ['Play / Pause', 'play-pause', 'play', true], ['Skip', 'skip', 'skip', true]]
+function Queue({ items, pending, current, act }: { items: Song[]; pending: Song[]; current: Song | null; act: Act }) {
+  const { playerControls } = useContext(SettingsCtx)
+  return (
+    <>
+      <div className={`mb-2 rounded-xl px-4 py-3 transition-colors ${current ? 'bg-accent/15' : 'bg-zinc-200/60 dark:bg-zinc-800/60'}`}>
+        <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className={`text-[10px] font-semibold uppercase tracking-wide text-accent`}>Now playing</div>
+          {current
+            ? <><div className="break-words font-medium leading-snug">{current.sONGNAME}</div><div className="break-words text-zinc-500">{current.sINGER}</div></>
+            : <><div className="font-medium leading-snug text-zinc-400">Nothing playing right now</div><div className="text-zinc-400">-</div></>}
+        </div>
+        <div aria-hidden className={`relative size-14 shrink-0 rounded-full ${current ? 'animate-spin bg-zinc-900 dark:bg-zinc-950' : 'bg-zinc-400 dark:bg-zinc-700'}`} style={current ? { animationDuration: '3s' } : undefined}>
+          <div className="absolute inset-1.5 rounded-full border border-white/10" />
+          <div className="absolute inset-3 rounded-full border border-white/10" />
+          <div className={`absolute inset-[18px] rounded-full ${current ? 'bg-accent' : 'bg-zinc-300 dark:bg-zinc-500'}`} />
+          <div className="absolute left-1/2 top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" />
+          <div className="absolute left-1.5 top-1/2 h-0.5 w-2 -translate-y-1/2 rounded bg-white/30" />
+        </div>
+        </div>
+        {playerControls && <div className="mt-3 flex flex-wrap gap-2">
+          {PLAYER_CONTROLS.map(([label, c, icon, solid]) => (
+            <button key={c} disabled={!current} className={`flex flex-1 items-center justify-center rounded-xl bg-white/80 px-3 py-2 text-accent shadow-sm transition duration-150 hover:bg-white hover:shadow-md active:scale-90 active:bg-accent active:text-white dark:bg-zinc-900/70 dark:hover:bg-zinc-900 disabled:pointer-events-none disabled:bg-zinc-300/40 disabled:text-zinc-400 disabled:shadow-none dark:disabled:bg-zinc-700/30 dark:disabled:text-zinc-600`} title={label} aria-label={label} onClick={() => act(c)}>{c === 'toggle-vocal' ? <><SolidMic /><span className="mx-2 h-4 w-px bg-current opacity-30" /><SolidMic off /></> : <Icon name={icon} className={`size-4 ${solid ? 'fill-current' : ''}`} />}</button>
+          ))}
+        </div>}
+      </div>
+      <ul className="grid gap-2">
+        {items.map((s, i) => <SongRow key={s.xH} s={s} act={act} queue first={i === 0} />)}
+        {pending.map((s, i) => <SongRow key={'dl' + i} s={s} act={act} queue downloading />)}
+      </ul>
+    </>
   )
 }
 
@@ -288,7 +341,7 @@ function SettingsMenu({ open, setOpen }: { open: boolean; setOpen: (o: boolean) 
 function SettingsPanel({ t, onManage }: { t: ReturnType<typeof useTheme>; onManage: () => void }) {
   const st = useContext(SettingsCtx) as ReturnType<typeof useSettingsState>
   return (
-    <div data-popup className="animate-pop pointer-events-auto ml-auto mt-16 max-h-[calc(100%-4rem)] w-64 max-w-full space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 self-start md:absolute md:right-3 md:top-[4.75rem] md:ml-0 md:mt-0 md:max-h-none md:max-w-[calc(100vw-1.5rem)] md:overflow-visible">
+    <div data-popup className="animate-pop pointer-events-auto mt-16 max-h-[calc(100%-4rem)] w-full max-w-xl space-y-3 overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-xl ring-1 ring-black/10 dark:bg-zinc-900 dark:ring-white/10 self-start md:absolute md:right-3 md:top-[4.75rem] md:mt-0 md:w-96 md:max-h-none md:max-w-[calc(100vw-1.5rem)] md:overflow-visible">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Style</h3>
       <div className="flex gap-1">
         {(['system', 'light', 'dark'] as Mode[]).map(m => (
@@ -309,6 +362,7 @@ function SettingsPanel({ t, onManage }: { t: ReturnType<typeof useTheme>; onMana
       <Toggle label="Longer popups" on={st.longPopups} onClick={() => st.toggle('longPopups')} />
       <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Remote</h3>
       <Toggle label="Show mic controls" on={st.showMic} onClick={() => st.toggle('showMic')} />
+      <Toggle label="Player controls on Now playing" on={st.playerControls} onClick={() => st.toggle('playerControls')} />
       <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Favorites</h3>
       <button onClick={onManage} className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories</button>
     </div>
@@ -514,7 +568,7 @@ function App() {
     document.addEventListener('pointerdown', h)
     return () => document.removeEventListener('pointerdown', h)
   }, [])
-  const [queue, setQueue] = useState<{ items: Song[]; count: number }>({ items: [], count: 0 })
+  const [queue, setQueue] = useState<{ items: Song[]; count: number; current: Song | null; pending: Song[]; downloaded: string[] }>({ items: [], count: 0, current: null, pending: [], downloaded: [] })
   const [toast, setToast] = useState<{ text: string; icon?: IconName; tone?: 'accent' | 'cloud' | 'error'; on: boolean }>({ text: '', on: false })
   const toastTimer = useRef<number>(0)
 
@@ -600,6 +654,7 @@ function App() {
     command(action, val, song).then(() => { show(label ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Can't reach the KTV machine", undefined, 'error'); refresh() })
   }
 
+  const cloudIds = useMemo(() => ({ pending: new Set(queue.pending.map(p => String(p.sONGBM))), downloaded: new Set(queue.downloaded) }), [queue.pending, queue.downloaded])
   const item = (on: boolean, extra = '') => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] transition duration-150 active:scale-95 md:flex-none md:flex-row md:gap-2 md:px-4 md:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
   const tabs = (cls: string) => (
     <nav className={cls}>
@@ -622,6 +677,7 @@ function App() {
     return <Landing host={cfgHost ?? null} onConnected={h => { setCfgHost(h); setFails(0); refresh() }} />
 
   return (
+    <CloudCtx.Provider value={cloudIds}>
     <div className="mx-auto min-h-dvh max-w-7xl pb-28 md:pb-6">
       {menu && <div data-dim className="animate-fade pointer-events-none fixed inset-0 z-[15] bg-black/40 max-md:pointer-events-auto max-md:touch-none md:z-[5]" />}
       <header className={`sticky top-0 z-10 flex items-center gap-3 p-3 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
@@ -650,16 +706,15 @@ function App() {
       )}
 
       <div className="flex gap-6 px-3">
-        <main className="min-w-0 flex-1">
+        <main className="min-w-0 flex-1 pt-2">
           {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
-          {tab === 'favorites' && <SavedList items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
-          {tab === 'history' && <SavedList items={history} q={q} act={act} favs={favs} empty="Nothing requested yet." note="Songs requested from this app, newest first. Not necessarily what played." />}
+          {tab === 'favorites' && <SavedList name="favorites" items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
+          {tab === 'history' && <SavedList name="history" items={history} q={q} act={act} favs={favs} empty="Nothing requested yet."/>}
           {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
-          {tab === 'queue' && <Queue items={queue.items} act={act} />}
+          {tab === 'queue' && <Queue items={queue.items} pending={queue.pending} current={queue.current} act={act} />}
         </main>
-        <aside className="sticky top-20 hidden h-[calc(100dvh-6rem)] w-96 shrink-0 overflow-y-auto lg:block">
-          <h2 className="mb-2 font-semibold">Queue ({total})</h2>
-          <Queue items={queue.items} act={act} />
+        <aside className="sticky top-[4.5rem] -mx-1 hidden h-[calc(100dvh-6rem)] w-96 shrink-0 overflow-y-auto px-1 pt-2 lg:block">
+          <Queue items={queue.items} pending={queue.pending} current={queue.current} act={act} />
         </aside>
       </div>
 
@@ -683,5 +738,6 @@ function App() {
         {toast.icon && <Icon name={toast.icon} className="size-4 shrink-0" />}<span className="truncate">{toast.text}</span>
       </div>
     </div>
+    </CloudCtx.Provider>
   )
 }
