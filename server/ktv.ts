@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { match } from 'pinyin-pro'
+import { docs } from './docs.ts'
 import { addCategory, addFavorite, cleanName, deleteCategory, isSong, type Song, reorderCategories, listCategories, listFavorites, listHistory, recordHistory, removeFavorite, renameCategory, setDbDir, setSongCategory } from './db.ts'
 
 const PORT = 8084
@@ -175,6 +176,7 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     json(res, 200, { host })
   })
   const path = new URL(url, 'http://x').pathname
+  if (docs(path, res)) return
   if (path === '/api/categories/order' && req.method === 'PUT') return void readBody(req).then(b => {
     let ids: unknown
     try { ids = JSON.parse(b).ids } catch { /* falls through to the 400 */ }
