@@ -25,7 +25,11 @@ const open = () => {
     CREATE TABLE IF NOT EXISTS favorite_categories (
       sONGBM TEXT NOT NULL REFERENCES favorites(sONGBM) ON DELETE CASCADE,
       category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-      PRIMARY KEY (sONGBM, category_id));`)
+      PRIMARY KEY (sONGBM, category_id));
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, v INTEGER NOT NULL, type TEXT NOT NULL, session TEXT, client TEXT, origin TEXT,
+      method TEXT, path TEXT, query TEXT, status INTEGER, song_id TEXT, song_name TEXT, singer TEXT, data TEXT);
+    CREATE INDEX IF NOT EXISTS events_ts ON events (ts);`)
   // pos orders the categories (drag to reorder); older dbs get it added, seeded from id so the order doesn't change
   if (!(d.prepare('PRAGMA table_info(categories)').all() as { name: string }[]).some(c => c.name === 'pos'))
     d.exec('ALTER TABLE categories ADD COLUMN pos INTEGER NOT NULL DEFAULT 0; UPDATE categories SET pos = id')
@@ -94,3 +98,15 @@ export function deleteCategory(id: number, songs: 'keep' | 'orphans' | 'all') {
 export function setSongCategory(bm: string, id: number, on: boolean) {
   get().prepare(on ? 'INSERT OR IGNORE INTO favorite_categories VALUES (?, ?)' : 'DELETE FROM favorite_categories WHERE sONGBM = ? AND category_id = ?').run(bm, id)
 }
+
+// Usage log (see stats.ts): append-only, never pruned, for aggregating later. ts is the server's UTC time in ms.
+// Bump LOG_VERSION when an event's fields change meaning in a way that breaks older rows; queries then use WHERE v >= n.
+export const LOG_VERSION = 1
+export type EventRow = {
+  ts: number; type: string; session?: string | null; client?: string | null; origin?: string | null
+  method?: string; path?: string; query?: string; status?: number; song?: Partial<Song> | null; data?: unknown
+}
+export const insertEvent = (e: EventRow) => get().prepare(
+  'INSERT INTO events (ts, v, type, session, client, origin, method, path, query, status, song_id, song_name, singer, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  .run(e.ts, LOG_VERSION, e.type, e.session ?? null, e.client ?? null, e.origin ?? null, e.method ?? null, e.path ?? null, e.query ?? null, e.status ?? null,
+    e.song?.sONGBM ?? null, e.song?.sONGNAME ?? null, e.song?.sINGER ?? null, e.data === undefined ? null : JSON.stringify(e.data))

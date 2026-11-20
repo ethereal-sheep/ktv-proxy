@@ -67,3 +67,9 @@ Favorites and history (the box has neither) live in `ktv.db`, a SQLite file besi
 Favorites can be grouped into categories (stored in the same file): hold a song to pick its categories (double-tap
 to favorite it). Add, rename and delete categories under Settings → Manage categories.
 `npm run dev:mock` fakes the box from the gitignored `mock/` folder.
+
+Usage is logged to an `events` table in the same `ktv.db`, for aggregating later (nothing reads it yet). It holds the
+requests that matter (adds, remote buttons, searches, favorites), song start/stop as the poller infers them, and
+sessions (open on the first box connection or song request, close after 15 idle minutes or a minute without the box).
+Each row has a UTC `ts` in ms and a format version `v`; bump `LOG_VERSION` in `server/db.ts` on a breaking change.
+`node --test mock/stats.test.ts` replays a fake night against a temp db.

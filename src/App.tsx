@@ -1,6 +1,6 @@
 import useEmblaCarousel from 'embla-carousel-react'
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { clearList, addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, recordHistory, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
+import { clearList, addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, type Origin, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
 
@@ -55,7 +55,8 @@ function Status({ state, empty, hasMore, more, retry }: { state: string; empty: 
   return <div ref={el} className="h-8" />
 }
 
-type Act = (action: string, val?: string, label?: string, icon?: IconName, song?: Song) => void
+type Act = (action: string, val?: string, label?: string, icon?: IconName, song?: Song, origin?: Origin) => void
+const from = (act: Act, origin: Origin): Act => (a, v, l, i, s) => act(a, v, l, i, s, origin) // tags song requests with the tab they came from
 // open: show the category picker (which also favorites/unfavorites; hold). add: favorite it (double tap); true if it did.
 type Favs = { has: (s: Song) => boolean; open: (s: Song) => void; add: (s: Song) => boolean }
 
@@ -96,13 +97,14 @@ const fit = (t: string, base: number, from: number, min: number) => {
 }
 
 // Cloud songs being downloaded, and ones already stored (those queue like normal songs).
-const CloudCtx = createContext({ pending: new Set<string>(), downloaded: new Set<string>() })
+const CloudCtx = createContext({ pending: new Set<string>(), downloaded: new Set<string>(), queued: new Map<string, number>() })
 
 function SongRow({ s, act, queue, favs, downloading, first }: { s: Song; act: Act; queue?: boolean; favs?: Favs; downloading?: boolean; first?: boolean }) {
   const { helperLabels } = useContext(SettingsCtx)
   const lbl = (t: string) => helperLabels && <span className="text-[10px] font-normal leading-none">{t}</span>
   const col = ' flex flex-col items-center gap-1'
-  const { pending, downloaded } = useContext(CloudCtx)
+  const { pending, downloaded, queued } = useContext(CloudCtx)
+  const inQueue = queued.get(String(s.sONGBM)) ?? 0
   const cloud = String(s.cLOUD) === '1' && (downloading || !queue) && !downloaded.has(String(s.sONGBM)) // the flag stays 1 after the download
   const [pop, setPop] = useState<{ x: number; y: number } | null>(null) // where the double tap landed; plays the heart animation
   const g = useRowGesture(() => favs?.open(s), (x, y) => { if (favs?.add(s)) setPop({ x, y }) })
@@ -111,9 +113,9 @@ function SongRow({ s, act, queue, favs, downloading, first }: { s: Song; act: Ac
   return (
     <li {...(queue || !favs ? {} : g.handlers)} tabIndex={queue || !favs ? undefined : 0} onKeyDown={e => e.key === 'Enter' && e.target === e.currentTarget && favs?.open(s)}
       className={`relative flex touch-manipulation select-none items-center gap-3 rounded-xl bg-white p-3 shadow-sm transition-[box-shadow,background-color] hover:shadow-md dark:bg-zinc-900 ${g.holding ? 'bg-accent/5 ring-2 ring-accent/40 duration-300' : 'duration-150'} ${downloading ? 'opacity-60' : ''}`}>
-      {(liked || cloud) && <span className="heart-badge absolute -left-1 -top-2 z-[1] flex items-center gap-1 drop-shadow">
-        {liked && <Icon name="favorites" className={`size-5 fill-current text-pink-500 ${pop ? 'animate-heart-pop' : ''}`} />}
-        {cloud && <span title="Cloud song: downloads when requested" className="flex items-center gap-1 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-500"><Icon name="cloud" className="size-5 fill-current" />{helperLabels && <span>Cloud</span>}</span>}
+      {(liked || cloud || (inQueue > 0 && !queue)) && <span className="heart-badge absolute -left-1 -top-2 z-[1] flex items-center gap-1 drop-shadow">
+        <span className="w-5 shrink-0">{liked ? <Icon name="favorites" className={`size-5 fill-current text-pink-500 ${pop ? 'animate-heart-pop' : ''}`} /> : cloud && <span title="Cloud song: downloads when requested" className="text-sky-500"><Icon name="cloud" className="size-5 fill-current" /></span>}</span> {/* heart and cloud never co-occur, so they share one slot; Queued sits in the same spot whatever else is shown */}
+        {inQueue > 0 && !queue && <span title={`In queue${inQueue > 1 ? ` ×${inQueue}` : ''}`} className="flex h-5 items-center rounded-full bg-amber-500 px-2 text-[9px] font-semibold uppercase leading-none tracking-wide text-white dark:bg-amber-400 dark:text-zinc-900">Queued{inQueue > 1 && ` ×${inQueue}`}</span>}
       </span>}
       {pop && <div onAnimationEnd={() => setPop(null)} style={{ left: pop.x, top: pop.y }} className="animate-heart-burst pointer-events-none fixed z-[2] -ml-6 -mt-6 text-pink-500"><Icon name="favorites" className="size-12 fill-current" /></div> /* fixed: an absolute one could stretch the page */}
       <div className="min-w-0 flex-1">
@@ -124,10 +126,10 @@ function SongRow({ s, act, queue, favs, downloading, first }: { s: Song; act: Ac
         <button disabled={first} className={btn + col + ' disabled:pointer-events-none disabled:opacity-40'} title="Play next" onClick={() => act('move-next', s.xH, `Playing next · ${s.sONGNAME}`, 'next')}><Icon name="next" />{lbl('Next')}</button>
         <button className={btn + col} title="Remove" onClick={() => act('remove', s.xH, `Removed · ${s.sONGNAME}`, 'remove')}><Icon name="remove" />{lbl('Remove')}</button>
       </> : cloud ? (
-        <button disabled={pending.has(String(s.sONGBM))} className="flex flex-col items-center gap-1 rounded-xl bg-sky-500 px-4 py-3 text-sm font-semibold text-white transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-sky-500/40 active:translate-y-0 active:scale-90 disabled:pointer-events-none disabled:opacity-40" title="Request download" onClick={() => act('add-song', s.sONGBM, `Cloud request sent · queued · ${s.sONGNAME}`, 'cloud', s)}><Icon name="download" />{lbl('Request')}</button>
+        <button disabled={pending.has(String(s.sONGBM))} className="flex flex-col items-center gap-1 rounded-xl bg-sky-500/15 px-4 py-3 text-sm font-semibold text-sky-600 transition duration-150 hover:-translate-y-0.5 hover:bg-sky-500/25 hover:shadow-md active:translate-y-0 dark:text-sky-400 active:scale-90 disabled:pointer-events-none disabled:opacity-40" title="Request download" onClick={() => act('add-song', s.sONGBM, `Cloud request sent · queued · ${s.sONGNAME}`, 'cloud', s)}><Icon name="download" className="size-5 [stroke-width:3]" />{lbl('Req')}</button>
       ) : <>
-        <button className={btn + col} title="Play next" onClick={() => act('play-song-next', s.sONGBM, `Playing next · ${s.sONGNAME}`, 'next', s)}><Icon name="next" />{lbl('Next')}</button>
-        <button className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:brightness-110 hover:shadow-lg hover:shadow-accent/40 active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('add-song', s.sONGBM, `Added · ${s.sONGNAME}`, 'add', s)}><Icon name="add" />{lbl('Add')}</button>
+        <button className={'rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-600 hover:bg-zinc-200 active:bg-accent active:text-white dark:bg-zinc-800 dark:text-inherit dark:hover:bg-zinc-700 transition duration-150 hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-90' + col} title="Play next" onClick={() => act('play-song-next', s.sONGBM, `Playing next · ${s.sONGNAME}`, 'next', s)}><Icon name="next" />{lbl('Next')}</button>
+        <button className="rounded-xl bg-accent/15 px-4 py-3 text-sm font-semibold text-accent flex flex-col items-center gap-1 transition duration-150 hover:-translate-y-0.5 hover:bg-accent/25 hover:shadow-md active:translate-y-0 active:scale-90" title="Add to queue" onClick={() => act('add-song', s.sONGBM, `Added · ${s.sONGNAME}`, 'add', s)}><Icon name="add" className="size-5 [stroke-width:3]" />{lbl('Add')}</button>
       </>}
     </li>
   )
@@ -180,7 +182,7 @@ function Landing({ host, onConnected }: { host: string | null; onConnected: (h: 
   return (
     <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-5 p-6">
       <div>
-        <h1 className="text-2xl font-bold text-accent">KTV</h1>
+        <h1><Logo size={32} text={39} /></h1>
         <p className="mt-1 text-zinc-500">{host ? `Can't reach the KTV machine at ${host.replace('http://', '')}. Still retrying in the background.` : 'Connect to your KTV machine to get started.'}</p>
       </div>
       <form className="flex gap-2" onSubmit={e => { e.preventDefault(); ip.trim() && connect(ip) }}>
@@ -208,17 +210,17 @@ function Songs({ q, act, filter, epoch, favs }: { q: string; act: Act; filter: F
   )
 }
 
-function SavedList({ name, items, q, act, favs, empty, narrow }: { name: ListName; items: Song[]; q: string; act: Act; favs: Favs; empty: string; narrow?: boolean }) {
+function SavedList({ name, items, q, cat, act, favs, empty, narrow }: { name: ListName; items: Song[]; q: string; cat?: CatFilter; act: Act; favs: Favs; empty: string; narrow?: boolean }) {
   const n = q.trim().toLowerCase()
   // the server matches (incl. pinyin); until it answers, or if it can't, fall back to plain text
   const [hits, setHits] = useState<{ ids: Set<string> } | null>(null) // kept while typing, so the list doesn't blank between keystrokes
   useEffect(() => {
-    if (!n) { setHits(null); return }
-    const t = setTimeout(() => searchList(name, n).then(l => Array.isArray(l) && setHits({ ids: new Set(l.map(s => s.sONGBM!)) })).catch(() => {}), 150)
+    if (!n && (cat === undefined || cat === 'all')) { setHits(null); return }
+    const t = setTimeout(() => searchList(name, n, cat === 'all' ? undefined : cat).then(l => Array.isArray(l) && setHits({ ids: new Set(l.map(s => s.sONGBM!)) })).catch(() => {}), 150)
     return () => clearTimeout(t)
-  }, [name, n])
+  }, [name, n, cat])
   if (!items.length) return <p className="p-6 text-center text-zinc-500">{empty}</p>
-  if (n && hits) items = items.filter(s => hits.ids.has(s.sONGBM!)) // no answer yet: keep showing the unfiltered list rather than a blank
+  if (hits) items = items.filter(s => hits.ids.has(s.sONGBM!)) // no answer yet: keep showing the unfiltered list rather than a blank
   if (!items.length) return <p className="p-6 text-center text-zinc-500">Nothing found.</p>
   return <ul className={`grid gap-2 ${narrow ? '' : 'xl:grid-cols-2'}`}>{items.map(s => <SongRow key={s.sONGBM} s={s} act={act} favs={favs} />)}</ul>
 }
@@ -274,6 +276,16 @@ const PLAYER_CONTROLS: [string, string, IconName, boolean?][] = [['Original / Ka
 const ctl = 'flex min-h-11 min-w-11 flex-1 items-center justify-center rounded-xl bg-white/80 px-2 text-sm text-accent shadow-sm transition duration-150 hover:bg-white hover:shadow-md active:scale-90 active:bg-accent active:text-white dark:bg-zinc-900/70 dark:hover:bg-zinc-900 disabled:pointer-events-none disabled:bg-zinc-300/40 disabled:text-zinc-400 disabled:shadow-none dark:disabled:bg-zinc-700/30 dark:disabled:text-zinc-600'
 
 // The vinyl: spins while a song plays.
+// The app mark: a round record in the accent colour (the same disc as the queue button) with a highlight arc, then a right-leaning wordmark sized separately from the disc.
+function Logo({ size = 24, text = 28 }: { size?: number; text?: number }) {
+  return (
+    <span className="flex select-none items-center gap-2 text-accent">
+      <svg aria-hidden width={size} height={size} viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="15" fill="currentColor" /><circle cx="16" cy="16" r="10" stroke="#fff" strokeOpacity=".5" strokeWidth="1.5" /><circle cx="16" cy="16" r="3.5" fill="#fff" /><path d="M22.5 5a13 13 0 0 1 5 5" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" /></svg>
+      <span style={{ fontSize: text, lineHeight: 1 }} className="inline-block -skew-x-12 font-black italic tracking-tighter">KTV</span>
+    </span>
+  )
+}
+
 function Disc({ spin, className }: { spin: boolean; className: string }) {
   return (
     <div aria-hidden className={`relative shrink-0 rounded-full ${spin ? 'animate-spin bg-zinc-900 dark:bg-zinc-950' : 'bg-zinc-400 dark:bg-zinc-700'} ${className}`} style={spin ? { animationDuration: '3s' } : undefined}>
@@ -363,7 +375,7 @@ function QueuePanel({ view, setView, queue, history, act, favs }: { view: QView;
                 {queue.pending.map((s, i) => <SongRow key={'dl' + i} s={s} act={act} queue downloading />)}
               </ul>
             </div>
-            <div className={pane}><SavedList name="history" items={history} q="" act={act} favs={favs} empty="" narrow /></div>
+            <div className={pane}><SavedList name="history" items={history} q="" act={from(act, 'history')} favs={favs} empty="" narrow /></div>
           </div>
         </div>
       </div>
@@ -374,13 +386,12 @@ function QueuePanel({ view, setView, queue, history, act, favs }: { view: QView;
 // Phones: a full-width headline ticker, Now playing then Up next, scrolling right to left. Tap opens the queue. Motion-reduced: a still line.
 function NowBanner({ current, next, onOpen }: { current: Song | null; next?: Song; onOpen: () => void }) {
   const { bannerSpeed } = useContext(SettingsCtx)
-  const line = (label: string, s: Song, now?: boolean) => <span className={`inline-flex items-center ${now ? '' : 'opacity-75'}`}><b className={`mr-2.5 rounded-sm px-1.5 py-0.5 leading-none text-[10px] font-bold uppercase tracking-[0.18em] ${now ? 'bg-white text-[color-mix(in_srgb,var(--accent)_100%,black)]' : 'border border-white/60 text-white'}`}>{label}</b><span className={now ? 'font-bold' : 'font-normal'}>{s.sONGNAME}</span><span aria-hidden className="mx-2.5 h-3 w-px bg-white/50" /><span className="text-white/70">{s.sINGER}</span></span>
-  const parts = [current && line('Now playing', current, true), next && line('Up next', next)].filter(Boolean)
-  if (!parts.length) return null
+  const line = (label: string, s: Song | null | undefined, now?: boolean) => <span className={`inline-flex items-center ${now ? '' : 'opacity-75'} ${!s && label === 'Not Playing' ? 'text-zinc-300' : ''}`}><b className={`mr-2.5 rounded-sm px-1.5 py-0.5 leading-none text-[10px] font-bold uppercase tracking-[0.18em] ${now ? 'bg-white text-[color-mix(in_srgb,var(--accent)_100%,black)]' : label === 'Not Playing' ? 'bg-white text-zinc-500' : 'border border-white/60'}`}>{label}</b><span className={now ? 'font-bold' : 'font-normal'}>{s ? s.sONGNAME : label === 'Not Playing' ? 'Anything' : 'Nothing'}</span>{s && <><span aria-hidden className="mx-2.5 h-3 w-px bg-white/50" /><span className="text-white/70">{s.sINGER}</span></>}</span>
+  const parts = [line(current ? 'Now playing' : 'Not Playing', current, !!current), line('Up next', next)]
   const chars = (current ? current.sONGNAME.length + current.sINGER.length : 0) + (next ? next.sONGNAME.length + next.sINGER.length : 0)
   const text = <span className="inline-flex min-w-[100vw] shrink-0 items-center gap-8 pr-8">{parts.map((p, i) => <Fragment key={i}><span>{p}</span><span aria-hidden className="size-1.5 rotate-45 bg-white/50" /></Fragment>)}</span>
   return (
-    <button data-popup onClick={onOpen} aria-label="Now playing and up next. Open queue" className="block h-9 w-full overflow-hidden bg-[color-mix(in_srgb,var(--accent)_62%,black)] font-mono text-sm text-white shadow-md shadow-black/20">
+    <button data-popup onClick={onOpen} aria-label="Now playing and up next. Open queue" className={`block h-9 w-full overflow-hidden font-mono text-sm text-white shadow-md shadow-black/20 ${current ? 'bg-[color-mix(in_srgb,var(--accent)_62%,black)]' : 'bg-zinc-500'}`}>
       <div className="flex h-full w-max animate-marquee items-center whitespace-nowrap" style={{ ['--d' as string]: `${Math.max(390, chars * 9 + 160) / bannerSpeed}s` }}>
         {text}<span aria-hidden>{text}</span>
       </div>
@@ -791,29 +802,32 @@ function App() {
     : tab === 'favorites' ? (catSel === 'all' ? undefined : catSel === 'none' ? 'Uncategorized' : cats.find(c => c.id === catSel)?.name)
     : area > 0 ? AREAS[area] : undefined
   const shownFavs = catSel === 'all' ? favList : favList.filter(s => (catSel === 'none' ? !s.cats?.length : s.cats?.includes(catSel)))
-  const record = (s: Song) => { // newest first, one entry per song; the server does the same and caps at 100
+  const record = (s: Song) => { // newest first, one entry per song; the server records it on the request and does the same, capped at 100
     setHistory(h => [s, ...h.filter(x => x.sONGBM !== s.sONGBM)].slice(0, 100))
-    recordHistory(s).catch(() => {})
   }
   const total = queue.items.length
   useEffect(() => { refresh(); const t = setInterval(refresh, 3000); return () => clearInterval(t) }, [refresh])
 
-  const act: Act = (action, val = '', label, icon, song) => {
+  const act: Act = (action, val = '', label, icon, song, origin) => {
     const show = (text: string, i?: IconName, tone?: 'error') => {
       // Pill mirrors the pressed button: Add is accent-filled, everything else neutral.
       setToast({ text, icon: i, tone: tone ?? (i === 'cloud' ? 'cloud' : action === 'add-song' ? 'accent' : undefined), on: true })
       clearTimeout(toastTimer.current)
       toastTimer.current = window.setTimeout(() => setToast(t => ({ ...t, on: false })), longPopups ? 4500 : 2500)
     }
-    command(action, val, song).then(() => { show(label ?? REMOTE_LABELS[action] ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Not sent · can't reach the KTV machine", undefined, 'error'); refresh() })
+    command(action, val, song, origin).then(() => { show(label ?? REMOTE_LABELS[action] ?? action, icon); if (song) record(song); refresh() }).catch(() => { show("Not sent · can't reach the KTV machine", undefined, 'error'); refresh() })
   }
 
-  const cloudIds = useMemo(() => ({ pending: new Set(queue.pending.map(p => String(p.sONGBM))), downloaded: new Set(queue.downloaded) }), [queue.pending, queue.downloaded])
+  const cloudIds = useMemo(() => {
+    const queued = new Map<string, number>()
+    queue.items.forEach(q => queued.set(String(q.sONGBM), (queued.get(String(q.sONGBM)) ?? 0) + 1))
+    return { pending: new Set(queue.pending.map(p => String(p.sONGBM))), downloaded: new Set(queue.downloaded), queued }
+  }, [queue.items, queue.pending, queue.downloaded])
   const item = (on: boolean, extra = '') => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] transition duration-150 active:scale-95 lg:flex-none lg:flex-row lg:gap-2 lg:px-4 lg:text-sm ${on ? 'bg-accent/15 font-bold text-accent' : 'text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'} ${extra}`
   const go = (k: Tab) => { setTab(k); setMenu(null); setSettings(false) }
   const tabBtn = (k: Tab) => (
     <button key={k} onClick={() => go(k)} className={item(!settings && tab === k)}>
-      <Icon name={k} className="size-5 lg:size-4" /><span className="whitespace-nowrap">{TABS.find(t => t[0] === k)![1]}</span>
+      <Icon name={k} className="size-5 lg:size-4" /><span className="grid justify-items-center whitespace-nowrap">{/* the bold label is reserved invisibly, so selecting a tab (which turns it bold) never changes its width */}<span aria-hidden className="invisible col-start-1 row-start-1 h-0 font-bold">{TABS.find(t => t[0] === k)![1]}</span><span className="col-start-1 row-start-1">{TABS.find(t => t[0] === k)![1]}</span></span>
     </button>
   )
   const playing = !!queue.current
@@ -845,9 +859,9 @@ function App() {
       <div className={`sticky top-0 z-10 ${opaqueBars ? 'bg-zinc-50 dark:bg-zinc-950' : 'bg-zinc-50/90 backdrop-blur dark:bg-zinc-950/90'}`}>
       {bannerOn && banner === 'top' && <div className="lg:hidden">{banner$}</div>}
       <header className={`flex items-center gap-3 p-3 ${settings ? 'max-lg:hidden' : ''}`}>
-        <h1 className="hidden text-lg font-bold text-accent sm:block">KTV</h1>
+        <h1 className="hidden sm:block"><Logo size={24} text={28} /></h1>
         <nav className="hidden lg:flex lg:gap-2">{TABS.map(([k]) => tabBtn(k))}</nav>
-        <div className={`min-w-0 flex-1 ${settings ? 'hidden' : ''}`} data-popup>
+        <div className={`min-w-0 flex-1 ${settings ? 'invisible' : ''}`} data-popup>
           <div className="relative">
           <input value={q} onChange={e => setQ(e.target.value)} type="search" placeholder={`Search ${tab}…`}
             className="w-full rounded-xl bg-zinc-200 py-3 pl-4 pr-40 outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800" />
@@ -873,8 +887,8 @@ function App() {
           {settings
             ? <SettingsPage t={theme} online={online} host={cfgHost} favs={favList.length} history={history.length} cats={cats.length} onManage={() => setModal({ kind: 'manage' })} reload={reload} />
             : <>
-              {tab === 'songs' && <Songs q={q} act={act} filter={filter} epoch={epoch} favs={favs} />}
-              {tab === 'favorites' && <SavedList name="favorites" items={shownFavs} q={q} act={act} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
+              {tab === 'songs' && <Songs q={q} act={from(act, 'songs')} filter={filter} epoch={epoch} favs={favs} />}
+              {tab === 'favorites' && <SavedList name="favorites" items={shownFavs} q={q} cat={catSel} act={from(act, 'favorites')} favs={favs} empty={favList.length ? 'No songs in this category.' : 'No favorites yet. Double-tap a song to save it.'} />}
               {tab === 'singers' && <Singers epoch={epoch} q={q} area={area} onPick={name => { setFilter({ singer: name }); setQ(''); setTab('songs') }} />}
             </>}
         </main>

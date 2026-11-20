@@ -2,12 +2,9 @@
 name: ktv-proxy
 description: Phone remote for a KTV box; zinc neutrals, one user-chosen accent, soft tactile controls.
 colors:
-  accent: "#ec4899"
-  accent-blue: "#3b82f6"
-  accent-green: "#22c55e"
-  accent-amber: "#f59e0b"
-  accent-violet: "#8b5cf6"
-  queue-sky: "#0ea5e9"
+  accent: "#8b5cf6"
+  cloud-sky: "#0ea5e9"
+  queued-amber: "#d97706"
   error-red: "#ef4444"
   paper: "#fafafa"
   ink: "#18181b"
@@ -29,8 +26,8 @@ components:
     textColor: "#ffffff"
     rounded: "{rounded.md}"
     padding: "12px 16px"
-  button-queue:
-    backgroundColor: "{colors.queue-sky}"
+  button-cloud:
+    backgroundColor: "{colors.cloud-sky}"
     textColor: "#ffffff"
     rounded: "{rounded.md}"
     padding: "12px 16px"
@@ -55,20 +52,21 @@ Big friendly tap targets, one bright accent, quick to scan in a dim room. The ca
 Light and dark are both first-class; dark follows the system by default.
 
 **Key Characteristics:**
-- Zinc neutrals with a single user-selectable accent (pink, blue, green, amber, violet).
+- Zinc neutrals with a single accent, violet. The picker is down to one choice for now, but the accent still flows through `--accent`.
 - Rounded-xl controls with lift and press feedback.
 - Small uppercase section labels over dense, wrapped Chinese/English song text.
 - Popovers float over the list (`rounded-2xl`, ring, shadow).
 
 ## Colors
 
-Neutral zinc canvas, one runtime accent, sky blue reserved for queue actions.
+Neutral zinc canvas, one runtime accent, sky blue reserved for cloud songs, amber for already-queued songs.
 
 ### Primary
-- **Party Pink** (#ec4899): default accent, exposed as `--accent`. Primary buttons, focus rings, brand title. User can swap it in Settings.
+- **Party Violet** (#8b5cf6): the accent, exposed as `--accent`. Primary buttons, focus rings, brand title. Pink, blue, green and amber were dropped as choices.
 
 ### Secondary
-- **Queue Sky** (#0ea5e9): "play next / queued" actions and queue badges. Stays fixed when the accent changes.
+- **Cloud Sky** (#0ea5e9): cloud songs, the Request download button, download progress and cloud toasts. Stays fixed when the accent changes.
+- **Queued Amber** (#d97706 light, amber-400 dark): the "Queued" check badge on a song already in the queue, with ×N when queued more than once. Fixed; not a user accent.
 
 ### Neutral
 - **Paper / Night** (zinc-50 / zinc-950): page background.
@@ -91,7 +89,7 @@ Neutral zinc canvas, one runtime accent, sky blue reserved for queue actions.
 - **Song title** (500, base, snug leading): wraps rather than truncates.
 - **Meta** (400, base/sm, zinc-500): artist, language.
 - **Label** (600, 0.75rem, wide tracking, uppercase, zinc-500): section headings in popovers.
-- **Tiny** (600, 9-10px, uppercase): queue badges.
+- **Tiny** (600, 9-10px, uppercase): cloud and queued badges.
 
 ## Layout
 
@@ -109,8 +107,8 @@ Rounded-xl (12px) for buttons and inputs, rounded-2xl (16px) for popovers, round
 
 ### Buttons
 - **Shape:** 12px radius.
-- **Primary:** accent fill, white text, semibold, `px-4 py-3`.
-- **Queue:** sky fill, stacked icon and label.
+- **Primary:** accent fill, white text, semibold, `px-4 py-3`. On song rows, Add is a tinted accent (15% fill, accent text, thick plus) so it does not outweigh Play next.
+- **Cloud request:** tinted sky fill, stacked icon and label.
 - **Hover / Press:** lift `-0.5` and brightness 110%, tinted shadow; press scales to 90-95%.
 
 ### Inputs / Fields
@@ -130,5 +128,5 @@ Rounded-xl (12px) for buttons and inputs, rounded-2xl (16px) for popovers, round
 - **Do** wrap long song text (`break-words`) instead of truncating.
 
 ### Don't:
-- **Don't** add a second user-facing accent; sky is for queue only.
+- **Don't** add a second user-facing accent; sky is for cloud only and amber for queued only.
 - **Don't** introduce custom fonts or heavy shadows.

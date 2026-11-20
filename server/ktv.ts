@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { match } from 'pinyin-pro'
 import { docs } from './docs.ts'
+import { boxFail, boxOk, setPlaying, track, type Meta } from './stats.ts'
 import { clearFavorites, clearHistory, addCategory, addFavorite, cleanName, deleteCategory, isSong, type Song, reorderCategories, listCategories, listFavorites, listHistory, recordHistory, removeFavorite, renameCategory, setDbDir, setSongCategory } from './db.ts'
 
 const PORT = 8084
@@ -135,11 +136,15 @@ async function pollQueue() {
   // shortcut: a download that never finishes is dropped after 3 min (a guess; the box took 40-60s)
   for (let i = pending.length; i--; ) if (Date.now() - pending[i].at > 180_000) pending.splice(i, 1)
   for (const k of removed) if (!keys.has(k)) removed.delete(k)
+  setPlaying(current)
   prev = { items, count: +d.number, playing }
   return snapshot(items, +d.number)
 }
 let polling: Promise<unknown> = Promise.resolve() // one poll at a time: the diff needs polls in order
-const poll = () => { const p = polling.then(pollQueue); polling = p.catch(() => {}); return p }
+const poll = () => {
+  const p = polling.then(pollQueue).then(q => { boxOk(); return q }, e => { if (boxFail()) current = null; throw e })
+  polling = p.catch(() => {}); return p
+}
 const pollQuietly = () => void poll().catch(() => {})
 setInterval(pollQuietly, 3000).unref()
 
@@ -175,7 +180,9 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     try { writeFileSync(CONFIG, JSON.stringify({ host })) } catch (e) { console.error('could not save config', e) }
     json(res, 200, { host })
   })
-  const path = new URL(url, 'http://x').pathname
+  const u = new URL(url, 'http://x'), path = u.pathname
+  const meta: Meta = {} // filled in by the routes that know which song a request is about
+  track(req, res, path, u.searchParams, u.search.slice(1), meta)
   if ((path === '/api/favorites' || path === '/api/history') && req.method === 'DELETE') {
     try { (path === '/api/favorites' ? clearFavorites : clearHistory)() } catch (e) { console.error('could not clear', e); return json(res, 500, { error: 'could not clear' }) }
     return json(res, 200, {})
@@ -222,16 +229,20 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     const [, name, bm] = list
     if (req.method === 'GET' && !bm) {
       const all = name === 'favorites' ? listFavorites() : listHistory() as Song[]
-      const q = (new URL(url, 'http://x').searchParams.get('q') ?? '').trim().toLowerCase()
+      const q = (u.searchParams.get('q') ?? '').trim().toLowerCase()
+      const cat = u.searchParams.get('category') // favorites only: a category id, or "none" for Uncategorized
+      if (cat !== null && cat !== 'none' && !/^\d+$/.test(cat)) return json(res, 400, { error: 'category must be an id or none' })
+      const inCat = (s: Song & { cats?: number[] }) => name !== 'favorites' || cat === null || (cat === 'none' ? !s.cats?.length : !!s.cats?.includes(+cat))
       // q: plain text, or pinyin / initials like the box's own search (done here so the browser doesn't ship the pinyin table)
-      return json(res, 200, q ? all.filter(s => [s.sONGNAME, s.sINGER].some(t => t.toLowerCase().includes(q) || match(t, q))) : all)
+      return json(res, 200, all.filter(s => inCat(s) && (!q || [s.sONGNAME, s.sINGER].some(t => t.toLowerCase().includes(q) || match(t, q)))))
     }
-    if (req.method === 'DELETE' && bm && name === 'favorites') { removeFavorite(decodeURIComponent(bm)); return json(res, 200, {}) }
-    if (req.method === 'POST' && !bm) return void readBody(req).then(b => {
+    if (req.method === 'DELETE' && bm && name === 'favorites') { meta.song = { sONGBM: decodeURIComponent(bm) }; removeFavorite(decodeURIComponent(bm)); return json(res, 200, {}) }
+    if (req.method === 'POST' && !bm && name === 'favorites') return void readBody(req).then(b => {
       let song: unknown
       try { song = JSON.parse(b) } catch { /* falls through to the 400 */ }
       if (!isSong(song)) return json(res, 400, { error: 'expected a song' })
-      try { (name === 'favorites' ? addFavorite : recordHistory)(song) } catch (e) { console.error('could not save ' + name, e); return json(res, 500, { error: 'could not save' }) }
+      meta.song = song
+      try { addFavorite(song) } catch (e) { console.error('could not save favorite', e); return json(res, 500, { error: 'could not save' }) }
       json(res, 200, {})
     })
   }
@@ -247,10 +258,13 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     json(res, e.message === 'no host configured' ? 503 : 502, { error: e.message })
   })
   // Songs are addressed by id (sONGBM) when adding, and by queue key (xH) once queued.
-  const command = (cmd: string, cmdValue: string, add?: { song: Song; cloud: boolean }) => {
+  const command = (cmd: string, cmdValue: string, add?: { song: Song; cloud: boolean }, record?: Song) => {
     if (cmd === 'Del1') removed.add(cmdValue)
     if (add) pending.push({ ...add, at: Date.now() })
-    fromBox(res, 'CommandServlet', { cmd, cmdValue }, d => d)
+    fromBox(res, 'CommandServlet', { cmd, cmdValue }, d => { // a requested song counts as history once the box accepted it
+      if (record) try { recordHistory(record) } catch (e) { console.error('could not save history', e) }
+      return d
+    })
     pollQuietly() // pick up the change now instead of in 3s
   }
   if (path === '/api/queue/songs' && req.method === 'POST') return void readBody(req).then(b => {
@@ -259,7 +273,8 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     if (typeof c.id !== 'string' || !c.id) return json(res, 400, { error: 'expected id' })
     const cloud = c.cloud === true && !downloaded.has(c.id)
     if (cloud && pending.some(p => p.cloud && p.song.sONGBM === c.id)) return json(res, 409, { error: 'already downloading' }) // the box ignores a second request while one is downloading
-    command(c.next ? 'Pro1' : 'Add1', c.id, { song: isSong(c.song) ? c.song : { ...UNKNOWN, sONGBM: c.id }, cloud })
+    meta.song = isSong(c.song) ? c.song : { sONGBM: c.id }; meta.data = { next: !!c.next, cloud }
+    command(c.next ? 'Pro1' : 'Add1', c.id, { song: isSong(c.song) ? c.song : { ...UNKNOWN, sONGBM: c.id }, cloud }, isSong(c.song) ? c.song : undefined)
   })
   const queued = path.match(/^\/api\/queue\/songs\/([^/]+)$/)
   if (queued && req.method === 'POST') return command('Pro2', decodeURIComponent(queued[1])) // move an already-queued song to play next

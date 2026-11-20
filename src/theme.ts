@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 
-export const ACCENTS = { pink: '#ec4899', blue: '#3b82f6', green: '#22c55e', amber: '#f59e0b', violet: '#8b5cf6' } as const
+export const ACCENTS = { violet: '#8b5cf6' } as const
 export type Mode = 'system' | 'light' | 'dark'
 
 const get = <T,>(k: string, d: T) => (localStorage.getItem(k) as T | null) ?? d
 
 export function useTheme() {
   const [mode, setMode] = useState<Mode>(get('mode', 'dark'))
-  const [accent, setAccent] = useState<keyof typeof ACCENTS>(get('accent', 'pink'))
+  const [accent, setAccent] = useState<keyof typeof ACCENTS>(() => { const a = get('accent', 'violet'); return a in ACCENTS ? a : 'violet' }) // a saved accent that was dropped falls back to violet
   useEffect(() => {
     const mq = matchMedia('(prefers-color-scheme: dark)')
     const apply = () => document.documentElement.classList.toggle('dark', mode === 'dark' || (mode === 'system' && mq.matches))

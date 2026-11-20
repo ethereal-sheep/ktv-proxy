@@ -20,7 +20,7 @@ export function mock(url: string, res: ServerResponse) {
   if (u.pathname.endsWith('/PlaylistServlet')) return out({ songList: JSON.stringify(mockQueue), number: mockQueue.length + (playing ? 1 : 0) })
   if (u.pathname.endsWith('/CommandServlet')) {
     const cmd = q.get('cmd'), v = q.get('cmdValue'), song = SONGS.find(x => x.sONGBM === v)
-    if ((cmd === 'Add1' || cmd === 'Pro1') && song) { if (!playing) playing = song; else mockQueue[cmd === 'Add1' ? 'push' : 'unshift']({ ...song, xH: String(++keySeq) }) }
+    if ((cmd === 'Add1' || cmd === 'Pro1') && song && !song.cLOUD) { if (!playing) playing = song; else mockQueue[cmd === 'Add1' ? 'push' : 'unshift']({ ...song, xH: String(++keySeq) }) }
     if (cmd === 'Del1') { const i = mockQueue.findIndex(x => x.xH === v); if (i >= 0) mockQueue.splice(i, 1) }
     if (cmd === 'Pro2') { const i = mockQueue.findIndex(x => x.xH === v); if (i > 0) mockQueue.unshift(...mockQueue.splice(i, 1)) }
     if (cmd === 'Skip') playing = mockQueue.shift() ?? null
