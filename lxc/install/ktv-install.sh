@@ -27,7 +27,7 @@ $STD git clone --depth 1 "$KTV_REPO" /opt/ktv
 cd /opt/ktv
 $STD npm ci
 $STD npm run build
-rm -rf node_modules # server/ only uses Node built-ins, so nothing is needed at runtime
+npm prune --omit=dev # server needs pinyin-pro at runtime
 mkdir -p /var/lib/ktv
 msg_ok "Installed KTV"
 

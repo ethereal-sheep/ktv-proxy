@@ -43,7 +43,7 @@ function update_script() {
   $STD git pull --ff-only
   $STD npm ci
   $STD npm run build
-  rm -rf node_modules
+  npm prune --omit=dev # server needs pinyin-pro at runtime
   msg_ok "Updated ${APP}"
 
   # the saved box address lives in /var/lib/ktv, so it survives the update
