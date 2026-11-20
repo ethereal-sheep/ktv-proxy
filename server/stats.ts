@@ -74,7 +74,7 @@ export function track(req: IncomingMessage, res: ServerResponse, path: string, p
   const client = cid && /^[\w-]{1,64}$/.test(cid) ? cid : null
   const origin = o && ORIGINS.includes(o) ? o : null
   if (key === 'POST /api/queue/songs') touch(); else expire()
-  const s = session
+  const s = session, ts = clock.now(), t0 = performance.now() // a request's ts is when it arrived, ms how long it took
   if (client && !seen.has(client)) { seen.add(client); write({ type: 'client_seen', client, data: { ua: h('user-agent') } }) }
-  res.on('finish', () => write({ type: 'request', session: s, client, origin, method, path, query: rawQuery, status: res.statusCode, song: meta.song, data: meta.data }))
+  res.on('finish', () => write({ type: 'request', session: s, client, origin, method, path, query: rawQuery, status: res.statusCode, ms: Math.round(performance.now() - t0), song: meta.song, data: meta.data }, ts))
 }

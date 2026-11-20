@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { match } from 'pinyin-pro'
 import { docs } from './docs.ts'
+import { logview } from './logview.ts'
 import { boxFail, boxOk, setPlaying, track, type Meta } from './stats.ts'
 import { clearFavorites, clearHistory, addCategory, addFavorite, cleanName, deleteCategory, isSong, type Song, reorderCategories, listCategories, listFavorites, listHistory, recordHistory, removeFavorite, renameCategory, setDbDir, setSongCategory } from './db.ts'
 
@@ -187,7 +188,7 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     try { (path === '/api/favorites' ? clearFavorites : clearHistory)() } catch (e) { console.error('could not clear', e); return json(res, 500, { error: 'could not clear' }) }
     return json(res, 200, {})
   }
-  if (docs(path, res)) return
+  if (docs(path, res) || logview(path, u.searchParams, res)) return
   if (path === '/api/categories/order' && req.method === 'PUT') return void readBody(req).then(b => {
     let ids: unknown
     try { ids = JSON.parse(b).ids } catch { /* falls through to the 400 */ }

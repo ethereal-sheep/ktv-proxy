@@ -28,11 +28,12 @@ const open = () => {
       PRIMARY KEY (sONGBM, category_id));
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, v INTEGER NOT NULL, type TEXT NOT NULL, session TEXT, client TEXT, origin TEXT,
-      method TEXT, path TEXT, query TEXT, status INTEGER, song_id TEXT, song_name TEXT, singer TEXT, data TEXT);
+      method TEXT, path TEXT, query TEXT, status INTEGER, ms INTEGER, song_id TEXT, song_name TEXT, singer TEXT, data TEXT);
     CREATE INDEX IF NOT EXISTS events_ts ON events (ts);`)
   // pos orders the categories (drag to reorder); older dbs get it added, seeded from id so the order doesn't change
   if (!(d.prepare('PRAGMA table_info(categories)').all() as { name: string }[]).some(c => c.name === 'pos'))
     d.exec('ALTER TABLE categories ADD COLUMN pos INTEGER NOT NULL DEFAULT 0; UPDATE categories SET pos = id')
+  if (!(d.prepare('PRAGMA table_info(events)').all() as { name: string }[]).some(c => c.name === 'ms')) d.exec('ALTER TABLE events ADD COLUMN ms INTEGER') // request duration
   return d
 }
 const get = () => (db ??= open()) // lazy: importing this from vite.config must not create the file
@@ -104,9 +105,17 @@ export function setSongCategory(bm: string, id: number, on: boolean) {
 export const LOG_VERSION = 1
 export type EventRow = {
   ts: number; type: string; session?: string | null; client?: string | null; origin?: string | null
-  method?: string; path?: string; query?: string; status?: number; song?: Partial<Song> | null; data?: unknown
+  method?: string; path?: string; query?: string; status?: number; ms?: number; song?: Partial<Song> | null; data?: unknown
 }
 export const insertEvent = (e: EventRow) => get().prepare(
-  'INSERT INTO events (ts, v, type, session, client, origin, method, path, query, status, song_id, song_name, singer, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-  .run(e.ts, LOG_VERSION, e.type, e.session ?? null, e.client ?? null, e.origin ?? null, e.method ?? null, e.path ?? null, e.query ?? null, e.status ?? null,
+  'INSERT INTO events (ts, v, type, session, client, origin, method, path, query, status, ms, song_id, song_name, singer, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  .run(e.ts, LOG_VERSION, e.type, e.session ?? null, e.client ?? null, e.origin ?? null, e.method ?? null, e.path ?? null, e.query ?? null, e.status ?? null, e.ms ?? null,
     e.song?.sONGBM ?? null, e.song?.sONGNAME ?? null, e.song?.sINGER ?? null, e.data === undefined ? null : JSON.stringify(e.data))
+
+// For the log viewer: with after, rows newer than that id; without, the latest n. Oldest first.
+export const listEvents = (after: number, n: number, type?: string) => {
+  const t = type ? 'AND type = ?' : '', a = type ? [type] : []
+  return after > 0
+    ? get().prepare(`SELECT * FROM events WHERE id > ? ${t} ORDER BY id LIMIT ?`).all(after, ...a, n)
+    : get().prepare(`SELECT * FROM (SELECT * FROM events WHERE 1 ${t} ORDER BY id DESC LIMIT ?) ORDER BY id`).all(...a, n)
+}
