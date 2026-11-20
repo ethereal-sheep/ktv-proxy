@@ -27,3 +27,5 @@ ktv-config.json
 # local databases (favorites/history), incl. the ones dev:mock writes
 ktv.db*
 mock/data/
+.claude
+.impeccable
