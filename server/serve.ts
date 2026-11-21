@@ -3,6 +3,7 @@ import http from 'node:http'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { ktv } from './ktv.ts'
+import { shim } from './shim.ts'
 
 const root = join(import.meta.dirname, '..', 'dist')
 const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' }
@@ -14,3 +15,6 @@ http.createServer((req, res) => ktv(req, res, () => {
   res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' })
   createReadStream(file).pipe(res)
 })).listen(+(process.env.PORT ?? 8080), () => console.log('KTV remote on :' + (process.env.PORT ?? 8080)))
+
+const SHIM = +(process.env.SHIM_PORT ?? 8085) // 0 disables; see shim.ts
+if (SHIM) http.createServer(shim).listen(SHIM, () => console.log('QR shim on :' + SHIM))

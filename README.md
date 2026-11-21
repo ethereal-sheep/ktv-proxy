@@ -73,3 +73,5 @@ requests that matter (adds, remote buttons, searches, favorites), song start/sto
 sessions (open on the first box connection or song request, close after 15 idle minutes or a minute without the box).
 Each row has a UTC `ts` in ms and a format version `v`; bump `LOG_VERSION` in `server/db.ts` on a breaking change.
 `node --test mock/stats.test.ts` replays a fake night against a temp db.
+
+**QR redirect (optional).** The server also listens on `SHIM_PORT` (default 8085, `0` disables) as a stand-in for the box: `/demo/en_us_index.html` (the box's QR landing page) redirects to this app, everything else is proxied to the box. Point a firewall port-forward for `box:8084` (source excluding this server) at `server:8085`. It is deliberately not on 8084, so the LAN scan never finds it. To redirect to a nicer URL (e.g. a reverse proxy in front of this server), set it under Settings → QR code.

@@ -1,6 +1,6 @@
 import useEmblaCarousel from 'embla-carousel-react'
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { clearList, addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQueue, searchList, type ListName, type Origin, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, setHost, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
+import { clearList, addCategory, addFavorite, command, deleteCategory, getCategories, getHost, getList, getQr, getQueue, searchList, type ListName, type Origin, removeFavorite, renameCategory, reorderCategories, setSongCategory, scanNetwork, serverId, setHost, setQr, searchSingers, searchSongs, singerImg, type Category, type DeleteSongs, type Filter, type Singer, type Song } from './api'
 import { ACCENTS, useTheme, type Mode } from './theme'
 import { Icon, SettingsCtx, useSettingsState, type IconName } from './settings'
 
@@ -446,6 +446,41 @@ function ClearRow({ label, count, onClear }: { label: string; count: number; onC
   )
 }
 
+// The box's QR opens its own page; a router port-forward to the shim (see server/shim.ts) sends phones here instead, or to this URL.
+function QrSection() {
+  const [saved, setSaved] = useState<string | null>(null) // null = not loaded yet
+  const [url, setUrl] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [check, setCheck] = useState<{ ok: boolean; text: string } | 'busy' | null>(null)
+  const test = () => {
+    setCheck('busy')
+    Promise.all([serverId(), serverId(url.trim())]).then(
+      ([me, them]) => setCheck(me === them ? { ok: true, text: 'Reaches this server' } : { ok: false, text: 'Reaches a different KTV server' }),
+      () => setCheck({ ok: false, text: "Couldn't reach this server at that URL" }), // CORS, DNS, cert or not a KTV server: the browser doesn't say which
+    )
+  }
+  useEffect(() => { getQr().then(u => { setSaved(u); setUrl(u) }).catch(() => {}) }, [])
+  const save = () => {
+    setBusy(true); setErr('')
+    setQr(url).then(u => { setSaved(u); setUrl(u) }).catch(e => setErr(e.message)).finally(() => setBusy(false))
+  }
+  return (
+    <section className={section}>
+      <h4 className={H}>QR code</h4>
+      <p className="text-sm text-zinc-500">Where scanning the box's QR code takes phones. Leave empty for this server's own address. Needs the router port-forward described in the README.</p>
+      <form className="flex gap-2" onSubmit={e => { e.preventDefault(); save() }}>
+        <input value={url} onChange={e => { setUrl(e.target.value); setCheck(null) }} type="url" inputMode="url" placeholder="https://ktv.example.com" aria-label="QR redirect URL" disabled={saved === null}
+          className="min-h-11 min-w-0 flex-1 rounded-lg bg-zinc-200 px-3 text-sm outline-none focus:ring-2 focus:ring-accent dark:bg-zinc-800" />
+        <button type="button" onClick={test} disabled={!url.trim() || check === 'busy'} className="min-h-11 rounded-lg bg-zinc-200 px-4 text-sm transition hover:bg-zinc-300 active:scale-95 disabled:opacity-40 dark:bg-zinc-800 dark:hover:bg-zinc-700">{check === 'busy' ? 'Testing…' : 'Test'}</button>
+        <button disabled={busy || saved === null || url.trim() === saved} className="min-h-11 rounded-lg bg-accent px-4 text-sm font-medium text-white transition active:scale-95 disabled:opacity-40">{busy ? 'Saving…' : 'Save'}</button>
+      </form>
+      {check && check !== 'busy' && <p role="status" className={`text-sm ${check.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{check.text}</p>}
+      {err && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+    </section>
+  )
+}
+
 function SettingsPage({ t, online, host, favs, history, cats, onManage, reload }: { t: ReturnType<typeof useTheme>; online: boolean | null; host: string | null | undefined; favs: number; history: number; cats: number; onManage: () => void; reload: () => void }) {
   const st = useContext(SettingsCtx) as ReturnType<typeof useSettingsState>
   const status = online === true ? ['Connected', 'text-green-600 dark:text-green-400'] : online === false ? ["Can't reach the box", 'text-red-600 dark:text-red-400'] : ['Checking…', 'text-zinc-500']
@@ -508,6 +543,7 @@ function SettingsPage({ t, online, host, favs, history, cats, onManage, reload }
             </dl>
             <a href="/api/docs" className="flex min-h-11 items-center text-sm text-accent hover:underline">API docs</a>
           </section>
+          <QrSection />
           <section className={section}>
             <h4 className={H}>Favorites</h4>
             <button onClick={onManage} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"><Icon name="tag" className="size-4" />Manage categories <span className="tabular-nums text-zinc-500">· {cats}</span></button>

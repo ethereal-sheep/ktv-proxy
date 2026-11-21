@@ -1,5 +1,6 @@
 // Runtime-configurable link to the KTV box: proxies /demo, stores the box address, and scans the LAN for it.
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -21,7 +22,10 @@ const mockUrl: string = pathToFileURL(join(import.meta.dirname, '..', 'mock', 'm
 const mock: (url: string, res: ServerResponse) => void = MOCK ? (await import(mockUrl)).mock : () => {}
 
 let host: string | null = MOCK ? 'http://mock:8084' : process.env.KTV_HOST ?? null
-if (!MOCK) try { host = JSON.parse(readFileSync(CONFIG, 'utf8')).host ?? host } catch { /* no saved config yet */ }
+let qr = '' // where the QR shim sends the box's landing page; '' = this server (see shim.ts)
+if (!MOCK) try { const c = JSON.parse(readFileSync(CONFIG, 'utf8')); host = c.host ?? host; qr = c.qr ?? '' } catch { /* no saved config yet */ }
+const SERVER_ID = randomUUID() // per run, so a match proves it's this very process
+const save = () => { try { writeFileSync(CONFIG, JSON.stringify({ host, qr })) } catch (e) { console.error('could not save config', e) } }
 
 // Only LAN addresses: this endpoint makes the server fetch from whatever it is given.
 const isLan = (ip: string) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.)/.test(ip)
@@ -168,6 +172,9 @@ function pictureFromBox(res: ServerResponse, name: string) {
 const json = (res: ServerResponse, code: number, body: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
 const readBody = (req: IncomingMessage) => new Promise<string>(r => { let b = ''; req.on('data', d => (b += d)); req.on('end', () => r(b)) })
 
+export const boxHost = () => host
+export const qrTarget = () => qr
+
 export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void) {
   const url = req.url ?? ''
   if (url === '/api/host' && req.method === 'GET') return json(res, 200, { host })
@@ -178,8 +185,19 @@ export function ktv(req: IncomingMessage, res: ServerResponse, next: () => void)
     if (!base) return json(res, 400, { error: 'Enter a LAN IP address, e.g. 192.168.1.50' })
     if (!(await probe(base, 3000))) return json(res, 422, { error: `Nothing answered like a KTV machine at ${base.replace('http://', '')}` })
     host = base
-    try { writeFileSync(CONFIG, JSON.stringify({ host })) } catch (e) { console.error('could not save config', e) }
+    save()
     json(res, 200, { host })
+  })
+  // CORS-open so Settings can fetch it through another URL (e.g. a reverse proxy) and check it's this same server
+  if (url === '/api/id') return void res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }).end(JSON.stringify({ id: SERVER_ID }))
+  if (url === '/api/qr' && req.method === 'GET') return json(res, 200, { url: qr })
+  if (url === '/api/qr' && req.method === 'POST') return void readBody(req).then(b => {
+    let input = ''
+    try { input = String(JSON.parse(b).url ?? '').trim() } catch { /* falls through to the 400 */ }
+    if (input && !/^https?:\/\/[^\s/]+/.test(input)) return json(res, 400, { error: 'Enter a full URL, e.g. https://ktv.example.com' })
+    qr = input
+    save()
+    json(res, 200, { url: qr })
   })
   const u = new URL(url, 'http://x'), path = u.pathname
   const meta: Meta = {} // filled in by the routes that know which song a request is about

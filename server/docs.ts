@@ -8,6 +8,8 @@ const spec = {
   openapi: '3.0.3', info: { title: 'KTV remote API', version: '0.0.0' },
   paths: {
     '/api/host': { get: op('Current box address'), post: op('Set the box address', body({ host: { type: 'string' } })) },
+    '/api/id': { get: op('Random id of this server process (CORS-open, for checking a URL reaches this server)') },
+    '/api/qr': { get: op('Where the QR shim redirects (empty = this server)'), post: op('Set the QR redirect URL', body({ url: { type: 'string' } })) },
     '/api/songs': { get: op('Search songs', { parameters: q('q', 'songType', 'singer', 'lang', 'sortType', 'page') }) },
     '/api/singers': { get: op('Search singers', { parameters: q('q', 'type', 'page') }) },
     '/api/singers/picture/{id}': { get: op('Singer picture', { parameters: [idParam('id')] }) },

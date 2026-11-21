@@ -44,7 +44,16 @@ export async function setHost(host: string): Promise<string> {
   if (!r.ok) throw new Error(d.error)
   return d.host
 }
-export const scanNetwork = () => apiFetch('/api/scan').then(r => r.json()).then(d => d.found as string[])
+export const getQr = () => apiFetch('/api/qr').then(r => r.json()).then(d => d.url as string)
+export async function setQr(url: string): Promise<string> {
+  const r = await apiFetch('/api/qr', { method: 'POST', body: JSON.stringify({ url }) })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.error)
+  return d.url
+}
+// '' = this server; otherwise a full URL, checked from the browser since that's the network the redirect has to work on
+export const serverId = (base = '') => fetch(base ? new URL('/api/id', base).href : '/api/id', { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(d => d.id as string)
+export const scanNetwork =() => apiFetch('/api/scan').then(r => r.json()).then(d => d.found as string[])
 
 // Favorites and history live in the front-end server's SQLite db (the box has neither). Cloud status is not stored: it goes stale.
 export type ListName = 'favorites' | 'history'
